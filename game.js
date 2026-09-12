@@ -113,8 +113,8 @@ const WEAPON_RING = { flame:'#FF6A00', frost:'#7FD0FF', laser:'#B14BFF',
 /* 武器道具的字母标识：地图上的武器格子直接显示字母，比矢量小图标更快辨认
  * F火焰枪 C冷冻枪 L激光枪 S散弹枪 H追踪弹 T电磁链 D穿甲钻 */
 const WEAPON_LETTER = { flame:'F', frost:'C', laser:'L', spread:'S', homing:'H', tesla:'T', drill:'D' };
-const CLASSIC_POOL_RATE = 0.7;   // 经典道具池占比（武器占 30%，避免稀释火力成长）
-const WEAPON_UNLOCK_LEVEL = 2;   // 第 1 关保持纯经典手感，第 2 关起掉落武器
+const CLASSIC_POOL_RATE = 0.5;   // 经典道具池占比（武器占 50%，保证玩家能频繁见到武器）
+const WEAPON_UNLOCK_LEVEL = 1;   // 所有关卡均可能掉落武器（不再限制第 2 关起）
 const ENEMY_NO_GUN = { homing: 1 };  // 追踪 + 一击必死过于劝退，敌军无法使用
 
 function gunDef(t){ return GUNS[(t && t.gun) || 'normal'] || GUNS.normal; }
@@ -142,7 +142,9 @@ let tileDelta = [];
 let snapFullNeeded = true;
 
 function isTerrainCacheable(v){
-  return v === BRICK || v === STEEL || v === DESERT || v === SWAMP || v === SNOW || v === BASE;
+  // 基地老鹰占 2x2 格，若进缓存会被脏区 clearRect 局部重绘切掉边角，
+  // 故 BASE 不进缓存，由 render() 在最后单独整只绘制。
+  return v === BRICK || v === STEEL || v === DESERT || v === SWAMP || v === SNOW;
 }
 function initTerrain(){
   if (!terrainCanvas){
@@ -177,7 +179,6 @@ function paintTerrainCell(r, c){
   else if (v === DESERT) drawDesert(x, y);
   else if (v === SWAMP) drawSwamp(x, y);
   else if (v === SNOW) drawSnow(x, y);
-  else if (v === BASE && r === 24 && c === 12) drawEagle(x, y);
 }
 function flushTerrain(){
   if (!terrainCtx) return;
@@ -685,7 +686,8 @@ const sfx = {
 
 /* ================= 游戏状态 ================= */
 let state = 'title';        // title | playing | clear | over
-let level = 1, score = 0, hiScore = 0, lives = 3;
+let level = 1, score = 0, hiScore = 0, lives = 2;
+let nextExtraLifeScore = 2000;   // 每 2000 分奖一命
 let player = null, enemies = [], bullets = [], items = [], explosions = [];
 let enemyQueue = [], spawnTimer = 0, killCount = 0;
 let freezeEnemies = 0, freezePlayer = 0, baseAlive = true, overReason = '';
@@ -699,7 +701,7 @@ let keys = {};
 /* ---- 双人合作状态（netMode==='off' 时全部不生效，单人路径零影响） ---- */
 let keys2 = {};             // 玩家2 的输入：房主侧由客方上报写入，驱动 player2
 let player2 = null;         // 玩家2 坦克
-let lives2 = 3;             // 玩家2 独立命数
+let lives2 = 2;             // 玩家2 独立命数
 let netMode = 'off';        // 'off' | 'host' | 'guest'
 let netSendAcc = 0;         // 网络发包节流累加器（20Hz）
 let coopReady = false;      // 客方是否已收到首帧快照
@@ -1031,7 +1033,7 @@ function updatePlayer(dt){
   if (player.dead){
     player.deadTimer -= dt;
     if (player.deadTimer <= 0 && lives > 0){
-      player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln:2, power: player.power || 1});
+      player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln:2, power: 1});
       addSpawnFx(player.px, player.py);
       sfx.spawn();
     }
@@ -1081,7 +1083,7 @@ function updatePlayer2(dt){
   if (player2.dead){
     player2.deadTimer -= dt;
     if (player2.deadTimer <= 0 && lives2 > 0){
-      player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', {invuln:2, power: player2.power || 1});
+      player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', {invuln:2, power: 1});
       addSpawnFx(player2.px, player2.py);
       sfx.spawn();
     }
@@ -1339,6 +1341,15 @@ function updateBullets(dt){
  * 燃烧 DOT 作为新的调用方也必须过这道闸，否则会击穿老鹰 60 秒无敌。 */
 function damageTank(t, n, src){
   if (!t || t.dead || t.invuln > 0) return false;
+  // 火力护盾：Lv2/Lv3 玩家被子弹/链跳命中时，先扣一级火力抵消本次伤害
+  const isBullet = src === 'bullet' || src === 'legacy' || src === 'chain';
+  if (t.isPlayer && t.power >= 2 && isBullet){
+    t.power = 1;
+    t.hitFlash = 0.18;
+    addExplosion(t.px, t.py, 'spark');
+    sfx.steel();
+    return true;
+  }
   t.hp -= (n || 1);
   t.hitFlash = 0.12;
   if (t.hp <= 0){
@@ -1352,7 +1363,7 @@ function damageTank(t, n, src){
       if (bothOutOfLives()){ overReason = '生命耗尽'; gameOver(); }
     } else {
       sfx.boom();
-      score += t.score;
+      addScore(t.score);
       killCount++;
       if (t.kind === 'bonus') spawnItem(t.x, t.y, true);          // 红色敌人必掉
       else if (t.kind === 'boss'){                                 // 首领：必掉双道具（force 可越过同屏上限）
@@ -1435,7 +1446,7 @@ function gameOver(){
 }
 
 /* 两层掉落池：武器直接并入会稀释火力成长（star 22% → 13%），
- * 改为经典池 70% / 武器池 30%，且第 1 关不出武器（保留纯经典手感）。 */
+ * 改为经典池 50% / 武器池 50%，所有关卡均可能掉落武器。 */
 function rollItemType(){
   if (level >= WEAPON_UNLOCK_LEVEL && Math.random() > CLASSIC_POOL_RATE){
     let total = WEAPON_WEIGHT.reduce((a, b) => a + b, 0), r = Math.random() * total;
@@ -1540,7 +1551,7 @@ function pickUpItem(it, tank){
     case 'grenade':
       if (isP){
         for (const e of enemies){
-          if (!e.dead){ e.dead = true; score += e.score; addExplosion(e.px, e.py, 'big'); }
+          if (!e.dead){ e.dead = true; addScore(e.score); addExplosion(e.px, e.py, 'big'); }
         }
         enemies = enemies.filter(e => !e.dead);
         bullets = bullets.filter(b => b.owner.isPlayer);
@@ -1655,8 +1666,20 @@ function startLevel(fresh){
 }
 
 function startGame(){
-  score = 0; lives = 3; level = 1; lives2 = 3;
+  score = 0; lives = 2; level = 1; lives2 = 2;
+  nextExtraLifeScore = 2000;
   startLevel(true);   // 重开一局：火力等级归 1
+}
+
+/* 统一加分入口：每满 2000 分奖一命 */
+function addScore(n){
+  score += (n || 0);
+  if (score >= nextExtraLifeScore){
+    lives = Math.min(6, lives + 1);
+    nextExtraLifeScore += 2000;
+    hint('得分奖命！');
+    sfx.item();
+  }
 }
 
 function nextLevel(){
@@ -2266,7 +2289,8 @@ function render(){
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
     if (map[r][c] === TREE) drawTree(c*TILE, r*TILE);
   }
-  if (!baseAlive) drawBaseBroken(12*TILE, 24*TILE);
+  if (baseAlive) drawEagle(12*TILE, 24*TILE);
+  else drawBaseBroken(12*TILE, 24*TILE);
   if (!coarsePointer) drawPanel();   // 触屏：canvas 面板已被 CSS 裁掉，信息改由 DOM HUD 呈现
   if (levelIntro > 0 && state === 'playing') drawCurtain();
   if (state === 'playing' && hintT > 0) drawHint();
@@ -2496,6 +2520,7 @@ function drawTitle(){
     { text:'保卫基地，消灭所有敌军', size:'16px sans-serif', color:'#C9D1D9', gap:40 },
     { text:'红色闪烁敌人击杀必掉道具', size:'15px sans-serif', color:'#FF6B6B', gap:26 },
     { text:'武器字母：F火焰 C冷冻 L激光 S散弹 H追踪 T电磁 D穿甲钻', size:'13px sans-serif', color:'#A9B4C0', gap:38 },
+    { text:'初始 2 条命 · 每 2000 分奖一命 · Lv2/Lv3 火力可挡一次子弹', size:'13px sans-serif', color:'#98A2AD', gap:30 },
     { text:'点按屏幕 或 按 Enter 开始游戏', size:'20px sans-serif', color:'#7FD0FF', gap:40 },
     { text:'方向键/摇杆移动 · 空格/开火键射击', size:'13px sans-serif', color:'#98A2AD', gap:26 },
     { text:'H 键切换血量档位：' + PLAYER_HP_MODES.map((m, i) =>
@@ -2649,6 +2674,7 @@ function serializeSnapshot(){
 function applySnapshot(s){
   if (!s) return;
   state = s.s; level = s.lvl; score = s.score; lives = s.lives; lives2 = s.lives2;
+  nextExtraLifeScore = (Math.floor(score / 2000) + 1) * 2000;
   freezeEnemies = s.fe; freezePlayer = s.fp; playerEagle = s.pe; levelIntro = s.li;
   baseAlive = (s.base === 1 || s.base === true);
   if (s.m){                               // 全量地图
@@ -2750,7 +2776,7 @@ function coopHandleMsg(msg){
 }
 
 function coopReset(){
-  netMode = 'off'; player2 = null; lives2 = 3; coopReady = false; coopDropped = false; coopRoomCode = '';
+  netMode = 'off'; player2 = null; lives2 = 2; coopReady = false; coopDropped = false; coopRoomCode = '';
   keys2 = {};
   if (typeof Net !== 'undefined') Net.disconnect();
 }

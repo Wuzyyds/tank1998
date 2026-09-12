@@ -356,6 +356,41 @@ grenadeBlasts.push({ px:200, py:200, t:0.8, r:60 });
 let renderOK = true; try { for (let i = 0; i < 30; i++){ update(0.016); render(); } } catch(e){ renderOK = e.message; }
 assert('J7 带武器/血条/状态/手雷警示渲染 30 帧不抛异常', renderOK === true, String(renderOK));
 hpMode = 0;
+
+/* ---------- K. 新机制回归 ---------- */
+/* K1/K2：火力护盾 */
+startGame(); levelIntro = 0;
+player.power = 2; player.hp = 1; player.invuln = 0;
+damageTank(player, 1, 'bullet');
+assert('K1 Lv2 玩家被子弹命中 → 火力降为 1 级并抵消本次伤害（不死）',
+       player.power === 1 && player.hp === 1 && !player.dead, 'power=' + player.power + ' hp=' + player.hp);
+player.invuln = 0; damageTank(player, 1, 'bullet');
+assert('K2 Lv1 玩家被子弹命中 → 正常扣血死亡',
+       player.dead === true, 'hp=' + player.hp);
+
+/* K3：每 2000 分奖一命 */
+startGame(); levelIntro = 0; score = 0; nextExtraLifeScore = 2000; lives = 2;
+addScore(1900);
+assert('K3 得分未达 2000 不奖命', lives === 2 && nextExtraLifeScore === 2000, 'lives=' + lives);
+addScore(150);
+assert('K4 得分达到 2000 奖一命且阈值提升到 4000',
+       lives === 3 && nextExtraLifeScore === 4000, 'lives=' + lives + ' next=' + nextExtraLifeScore);
+addScore(2100);
+assert('K5 得分达到 4000 再奖一命且阈值提升到 6000',
+       lives === 4 && nextExtraLifeScore === 6000, 'lives=' + lives + ' next=' + nextExtraLifeScore);
+
+/* K6：基地老鹰不再被地形缓存局部重绘切掉 */
+assert('K6 基地老鹰格不再进 terrain cache',
+       isTerrainCacheable(BASE) === false, 'cacheable=' + isTerrainCacheable(BASE));
+
+/* K7：第 1 关即可掉落武器 */
+startGame(); levelIntro = 0;
+let sawWeapon = false;
+for (let i = 0; i < 200 && !sawWeapon; i++){
+  const t = rollItemType();
+  if (WEAPON_TYPES.indexOf(t) >= 0) sawWeapon = true;
+}
+assert('K7 第 1 关 rollItemType 能开出武器', sawWeapon, '');
 `;
 
 let err = null;

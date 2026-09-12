@@ -196,7 +196,7 @@ function unit() {
   // 快照往返：player2 与 lives2 保留
   const round = vm.runInContext("(function(){ var s = serializeSnapshot(); var before = {p2: !!s.p2, lives2: s.lives2}; applySnapshot(s); return {before: before, after: {p2: !!player2, lives2: lives2}}; })()", context);
   assert('快照含 player2 且 applySnapshot 还原 player2', round.before.p2 && round.after.p2, JSON.stringify(round));
-  assert('快照往返保留 lives2', round.before.lives2 === 3 && round.after.lives2 === 3, JSON.stringify(round));
+  assert('快照往返保留 lives2', round.before.lives2 === 2 && round.after.lives2 === 2, JSON.stringify(round));
 
   // 输入打包对称
   const packSym = vm.runInContext("(function(){ var k = {ArrowUp:true, Space:true}; var b = packInput(k); var u = unpackInput(b); return u.ArrowUp === true && u.Space === true && u.ArrowDown === false; })()", context);
@@ -223,7 +223,7 @@ function unit() {
 
   // 单关内复活保留火力：player 阵亡且仍有命，updatePlayer 复活后应保留 power
   const respawn = vm.runInContext("(function(){ netMode='off'; player2=null; player.power=2; player.dead=true; player.deadTimer=0.1; lives=3; updatePlayer(0.2); return {pow: player.power, dead: player.dead}; })()", context);
-  assert('复活保留火力等级（power=2）', respawn.pow === 2 && respawn.dead === false, JSON.stringify(respawn));
+  assert('复活后火力重置为 1 级', respawn.pow === 1 && respawn.dead === false, JSON.stringify(respawn));
 
   // 无障碍：减少动效把高倍闪烁限制到 <=3Hz（WCAG 2.3.1）
   const rm = vm.runInContext("(function(){ function starts(hz, reduce, dur){ reduceMotion = reduce; var c = 0, prev = null; for (var t = 0; t < dur; t += 0.005){ gameTime = t; var on = flashOn(hz); if (prev === false && on) c++; prev = on; } return c; } var normal = starts(10, false, 2); var reduced = starts(10, true, 2); reduceMotion = false; return { normal: normal, reduced: reduced, cap: FLASH_HZ_MAX }; })()", context);
@@ -244,7 +244,7 @@ function unit() {
   // 重开一局必须重置火力等级（基地被摧毁 / 生命耗尽后重开，不能带着上一局的火力）
   const fresh = vm.runInContext("(function(){ netMode='off'; player2=null; player.power=3; level=5; lives=1; startGame(); return {pow: player.power, lvl: level, lives: lives}; })()", context);
   assert('重开一局：火力等级回到 1 级（不再继承上局）', fresh.pow === 1, JSON.stringify(fresh));
-  assert('重开一局：关卡回到 01 且命数重置为 3', fresh.lvl === 1 && fresh.lives === 3, JSON.stringify(fresh));
+  assert('重开一局：关卡回到 01 且命数重置为 2', fresh.lvl === 1 && fresh.lives === 2, JSON.stringify(fresh));
 
   // 完整复现用户报的场景：打到第 2 关（火力 Lv3）基地被摧毁 → GAME OVER → 点按重开
   const replay = vm.runInContext("(function(){ netMode='off'; player2=null; startGame(); level=2; player.power=3; player.gun='laser'; player.ammo=5; destroyBase(); var st1 = state; gameTime += 2; requestStart(); return { st1: st1, st2: state, pow: player.power, lvl: level, gun: player.gun, ammo: player.ammo }; })()", context);
