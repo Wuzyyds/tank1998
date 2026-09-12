@@ -1,0 +1,79 @@
+[coop] Net 模块未加载
+  [PASS] A1 标题页 120 帧（矢量回退渲染）无异常   → null
+  [PASS] A2 全部坦克/道具图片资源标记加载成功   → IMG keys=12
+  [PASS] A3 开局进入幕布阶段   → levelIntro=1.60
+  [PASS] A4 开局 300 帧（幕布+贴图坦克+音效回退层）无异常   → null
+  [PASS] A5 幕布开场已结束且游戏继续   → state=playing
+  [PASS] B1 图片全挂时 200 帧回退渲染无异常   → null
+  [PASS] C1 无 AudioContext 时 playSnd 走内嵌 dataURI 兜底   → src=data:audio/wav;base64,UklGRrQOAABXQVZFZm10
+  [PASS] C2 sfx.shoot 不抛异常
+  [PASS] C3 播放可用时返回 true；被拒后返回 false（不阻断 beep 兜底）
+  [PASS] C4 dataURI 兜底资源已内嵌（13 个音效）   → 内嵌数=13
+  [PASS] C5 audioBlocked() 在无 AudioContext 时为 true（面板会提示）
+  [PASS] D1 拾取老鹰 → 立即无敌 invuln=60   → invuln=60
+  [PASS] D2 20 秒后剩余 ≈40   → playerEagle=40.000
+  [PASS] D3 重复拾取重置 60（不叠加）   → playerEagle=60.000
+  [PASS] D4 60 秒后自动解除   → invuln=0.0000
+  [PASS] E1 1v1 同归于尽   → 存活=0
+  [PASS] E2 2v2 同归于尽（新规则，原为穿透）   → 存活=0
+  [PASS] E2b 3v3 同归于尽   → 存活=0
+  [PASS] E3 2v1 → 高级弹降为 1 级继续飞   → 存活=1 power=1
+  [PASS] E4 3v1 → 降为 2 级   → power=2
+  [PASS] E5 3v2 → 降为 1 级   → power=1
+  [PASS] E6 降级后速度按新等级重算（260+45=305）   → speed=305
+  [PASS] E7 同阵营子弹互不干扰   → 存活=2
+  [PASS] E8 弹幕中一次交火最多被削一级（3 级不会瞬间掉到 1 级）   → power=2
+  [PASS] E9 裸子弹对象（无 gun/ang）全程不抛异常   → true
+  [PASS] F1 幕布时长 = 1.6s
+  [PASS] F2 玩家出生星星已生成   → spawn fx=1
+  [PASS] G0 画布与开始按钮均已注册事件
+  [PASS] G1 标题页点按画布即可开局（无需键盘）   → state=playing
+  [PASS] G2 结束瞬间误触保护生效（0.8s 内不重开）   → state=over
+  [PASS] G3 锁定解除后点按画布重新开始   → state=playing
+  [PASS] G4 过关后点按画布进入下一关   → state=playing level=2
+  [PASS] G5 工具栏“开始游戏”按钮可用   → state=playing
+  [PASS] G6 开始按钮文案随状态切换、游戏中禁用   → ▶ 开始游戏 | ↻ 重新开始 | ⏭ 下一关 | disabled=true
+  [PASS] G7 游戏进行中点按画布不会误触重开   → level=1
+  [PASS] H1 敌人吃火力封顶 2 级（3 级会蒸干水塘）   → power=2
+  [PASS] H2 敌人吃护盾 = 6 秒（玩家 12 秒）   → invuln=6
+  [PASS] H3 敌人吃时钟 = 冻玩家 4 秒   → freezePlayer=4
+  [PASS] H4 敌人吃两栖 = 20 秒   → amph=20
+  [PASS] H5 敌人吃老鹰退化为护盾，玩家不获得老鹰   → eagle=0
+  [PASS] H6 敌人吃加命 = 敌军增援（不偷玩家命）   → lives=2 queue=1
+  [PASS] H7 敌人吃手雷先进入引信警示（1 秒）   → blasts=1
+  [PASS] H8 引信期间尚未爆炸   → hp=1
+  [PASS] H9 引信结束：范围内玩家受伤、敌人被炸死   → hp=0 dead=true
+  [PASS] H10 玩家吃手雷仍是全屏清敌   → 剩余=0
+  [PASS] I1 拾取火焰枪 → 获得弹药   → gun=flame ammo=15
+  [PASS] I2 重复拾取同种武器 → 补给 +3   → ammo=18
+  [PASS] I3 换枪 → 余弹重置为新武器   → gun=frost ammo=12
+  [PASS] I4 燃烧未满 0.4s 不结算   → hp=4
+  [PASS] I5 满 0.4s 结算 1 点   → hp=3
+  [PASS] I6 老鹰无敌期间燃烧 DOT 暂停（不击穿无敌）   → dead=false lives=2
+  [PASS] I7 减速：statusSpeedMul=0.5 且 speed 字段不变   → mul=0.5
+  [PASS] I8 减速结束恢复   → mul=1
+  [PASS] I9 玩家被点燃 → 过热封锁射击而非掉血   → overheat=1.5 hp=1
+  [PASS] I10 激光弹带武器标记与穿砖额度   → gun=laser brickLeft=2
+  [PASS] I11 激光穿砖后继续飞行   → dead=false
+  [PASS] I12 激光被钢板挡下（保留钢墙作为绝对掩体）   → dead=true
+  [PASS] I13 电磁链命中后连锁到附近单位   → A1hp=0 A2hp=0
+  [PASS] I14 幕布开场期间燃烧不结算（世界静止）   → hp=1
+  [PASS] J1 默认经典档位玩家 1 血   → hp=1
+  [PASS] J2 标准档位玩家 2 血   → hp=2
+  [PASS] J3 2 血挨一发不死且进入 1 秒无敌   → hp=1 invuln=1.00
+  [PASS] J4 第二发致死   → dead=true
+  [PASS] J5 armor 仍为 4 血   → hp=4
+  [PASS] J6 power 型敌人提升到 2 血   → hp=2
+  [PASS] J7 带武器/血条/状态/手雷警示渲染 30 帧不抛异常   → true
+  [PASS] K1 Lv2 玩家被子弹命中 → 火力降为 1 级并抵消本次伤害（不死）   → power=1 hp=1
+  [PASS] K2 Lv1 玩家被子弹命中 → 正常扣血死亡   → hp=0
+  [PASS] K3 得分未达 2000 不奖命   → lives=2
+  [PASS] K4 得分达到 2000 奖一命且阈值提升到 4000   → lives=3 next=4000
+  [PASS] K5 得分达到 4000 再奖一命且阈值提升到 6000   → lives=4 next=6000
+  [PASS] K6 基地老鹰格不再进 terrain cache   → cacheable=false
+  [PASS] K7 第 1 关 rollItemType 能开出武器
+  [PASS] L1 图鉴切到「敌人」：对应 pane/tab 激活、其余未激活   → ["weapon:false","item:false","enemy:true","rule:false"]
+  [PASS] L2 再切到「机制」：只 rule 激活   → ["weapon:false","item:false","enemy:false","rule:true"]
+  [PASS] L3 点击「图鉴」按钮显示覆盖层   → handlers=1
+
+结果: 76/76 通过

@@ -1,0 +1,93 @@
+
+=== 集成：server.js 中继协议 ===
+  [PASS] /lan 端点返回 JSON 且端口一致   -> {"ip":"192.168.8.52","port":8099,"url":"http://192.168.8.52:8099"}
+  [PASS] /lan 不返回 169.254.x.x APIPA 地址   -> 192.168.8.52
+  [PASS] /lan 不返回 127.x.x.x 本机回环   -> 192.168.8.52
+  [PASS] 房主创建房间返回 4 位房间号   -> UKWY
+  [PASS] 客方加入房间成功   -> {"type":"room","action":"joined","code":"UKWY","token":"5sO0gjBGgLU776jG"}
+  [PASS] 房主收到 peer.joined 通知
+  [PASS] 输入从客方中继到房主（带 from 标签）   -> {"type":"input","k":5,"from":"guest"}
+  [PASS] 快照从房主中继到客方（含 player2）   -> {"p2":{"exists":true},"lives2":3,"score":42}
+  [PASS] 加入不存在的房间返回 ROOM_NOT_FOUND
+  [PASS] manifest.webmanifest 以 manifest+json 提供   -> 200 application/manifest+json; charset=utf-8
+  [PASS] PWA 图标以 image/png 提供   -> 200 image/png
+  [PASS] Service Worker 可访问   -> 200
+  [PASS] index.html 含设置面板与 HUD 武器栏（DOM id 齐全）   -> missing=
+  [PASS] 客方掉线，房主收到 peer.dropped
+  [PASS] 客方加入时拿到重连令牌
+  [PASS] 客方凭令牌重连成功（rejoined）   -> {"type":"room","action":"rejoined","code":"UKWY","role":"guest"}
+  [PASS] 房主收到 peer.rejoined 通知   -> {"type":"peer","event":"rejoined","role":"guest"}
+  [PASS] 重连后输入中继恢复   -> {"type":"input","k":7,"from":"guest"}
+  [PASS] 错误令牌重连被拒绝（REJOIN_FAILED）
+
+=== 单元：game.js 同步逻辑 ===
+[coop] Net 模块未加载
+  [PASS] 房主开局生成玩家2（独立坦克）
+  [PASS] 快照含 player2 且 applySnapshot 还原 player2   -> {"before":{"p2":true,"lives2":2},"after":{"p2":true,"lives2":2}}
+  [PASS] 快照往返保留 lives2   -> {"before":{"p2":true,"lives2":2},"after":{"p2":true,"lives2":2}}
+  [PASS] packInput/unpackInput 对称（上+开火）
+  [PASS] playerTargets：双人=2 单人=1   -> {"coop":2,"solo":1}
+  [PASS] bothOutOfLives：仅 P1 没命不算结束；两人都没命才结束   -> {"a":false,"b":true}
+  [PASS] 友伤关闭：玩家子弹在无敌人时不锁定玩家   -> {"emptyEnemy":null,"withEnemy":true}
+  [PASS] 友伤关闭：玩家子弹优先锁定敌人而非玩家
+  [PASS] nextLevel 后关卡数 +1   -> {"lvl0":1,"lvl1":2,"pPow":3,"p2Pow":2}
+  [PASS] 过关继承玩家火力（P1 power=3 保留）   -> {"lvl0":1,"lvl1":2,"pPow":3,"p2Pow":2}
+  [PASS] 过关继承玩家火力（P2 power=2 保留）   -> {"lvl0":1,"lvl1":2,"pPow":3,"p2Pow":2}
+  [PASS] 复活后火力重置为 1 级   -> {"pow":1,"dead":false}
+  [PASS] 减少动效：正常时 10Hz 闪烁每秒亮起约 5 次   -> {"normal":9,"reduced":2,"cap":3}
+  [PASS] 减少动效：开启后闪烁上限 ≤3Hz（2 秒内亮起 ≤4 次）   -> {"normal":9,"reduced":2,"cap":3}
+  [PASS] 高分屏：DPR=2 时背板放大为 1360x1040   -> {"dpr":2,"cw":1360,"ch":1040,"restore":1}
+  [PASS] 高分屏：无 DPR 时回退为 1（680x520）   -> {"dpr":2,"cw":1360,"ch":1040,"restore":1}
+  [PASS] DOM HUD：分数补零为 6 位   -> {"score":"001234","lives":"♥♥","level":"07","power":"Lv3","enemy":"02","coarse":false}
+  [PASS] DOM HUD：生命/关卡/火力/敌余同步正确   -> {"score":"001234","lives":"♥♥","level":"07","power":"Lv3","enemy":"02","coarse":false}
+  [PASS] DOM HUD：非触屏环境不启用（coarsePointer=false，桌面走 canvas 面板）
+  [PASS] 重开一局：火力等级回到 1 级（不再继承上局）   -> {"pow":1,"lvl":1,"lives":2}
+  [PASS] 重开一局：关卡回到 01 且命数重置为 2   -> {"pow":1,"lvl":1,"lives":2}
+  [PASS] 基地被摧毁 → 点按重开：状态恢复 playing 且火力回到 Lv1   -> {"st1":"over","st2":"playing","pow":1,"lvl":1,"gun":"normal","ammo":0}
+  [PASS] 基地被摧毁 → 点按重开：关卡回到 01、武器清空为普通弹   -> {"st1":"over","st2":"playing","pow":1,"lvl":1,"gun":"normal","ammo":0}
+  [PASS] 武器字母：7 种武器均有字母标识   -> {"total":7,"miss":[],"dup":[],"ls":"LS"}
+  [PASS] 武器字母：字母唯一（激光=L 散弹=S）   -> {"total":7,"miss":[],"dup":[],"ls":"LS"}
+  [PASS] 武器道具：地图上绘制字母 F / D   -> ["F","D"]
+  [PASS] GAME OVER 排版：4 行递增且行距充足（得分不被提示覆盖）   -> [{"t":"GAME OVER","y":190},{"t":"基地被摧毁","y":270},{"t":"得分 0","y":320},{"t":"点按屏幕 或 按 Enter 重新开始","y":364}]
+  [PASS] 标题 / 过关排版：行与行不重叠   -> {"title":9,"clear":3}
+  [PASS] 地形缓存：开局整张重建（>100 个矩形）   -> {"full":1397}
+  [PASS] 地形缓存：无变化时零重绘（idle=0，render 后仍为 0）   -> {"full":1397,"idle":0,"afterRender":0,"dirty":9,"hit":[3,10],"outOfRange":0,"tile":0}
+  [PASS] 地形缓存：打掉一块砖只重画 3x3 邻域（矩形不越界，且确实有重绘）   -> {"full":1397,"idle":0,"afterRender":0,"dirty":9,"hit":[3,10],"outOfRange":0,"tile":0}
+  [PASS] 难度阶梯：每 5 关一档（1 新兵 / 6 老兵 / 11 精锐 / 21 噩梦，超过 5 档封顶）   -> {"t1":"新兵","t6":"老兵","t11":"精锐","t21":"噩梦","t40":"噩梦","elite4":true,"boss4":false,"boss5":true,"elite5":false,"elite9":true}
+  [PASS] 关卡标签：第 4 关=精英关、第 5 关=BOSS、第 9 关=精英关   -> {"t1":"新兵","t6":"老兵","t11":"精锐","t21":"噩梦","t40":"噩梦","elite4":true,"boss4":false,"boss5":true,"elite5":false,"elite9":true}
+  [PASS] 难度：1 关基础敌人 1 血 / 速度 x1.0 / 队列 24   -> {"a":{"spd":1,"hp":1,"total":24},"b":{"spd":1.32,"hp":3,"total":35,"bossHp":10,"smart":0.92}}
+  [PASS] 难度：21 关（噩梦）基础敌人 3 血 / 速度 x1.32 / 队列 35   -> {"a":{"spd":1,"hp":1,"total":24},"b":{"spd":1.32,"hp":3,"total":35,"bossHp":10,"smart":0.92}}
+  [PASS] 难度：BOSS 不吃档位加血（固定 10 血）   -> {"a":{"spd":1,"hp":1,"total":24},"b":{"spd":1.32,"hp":3,"total":35,"bossHp":10,"smart":0.92}}
+  [PASS] BOSS 关：队列末尾追加首领，且全场只有 1 只   -> {"last":"boss","bossCount":1}
+  [PASS] 精英关：队列前段插入 3 只精英，且无 BOSS   -> {"elite":3,"hasBoss":false}
+  [PASS] 关卡主题：每 5 关换一种地貌并循环（草原→沙漠→雪原→沼泽→钢铁→草原）   -> ["草原","沙漠","雪原","沼泽","钢铁","草原"]
+  [PASS] 首领阵亡：掉落 2 个道具（force 越过同屏 3 上限），得分 2000   -> {"dead":true,"dropped":2,"score":2000}
+  [PASS] 音量总线：无 AudioContext 时不报错且总线未创建   -> {"actx":false,"bus":null,"clampHi":1,"clampLo":0,"sfx":0.25,"ignored":true,"bgmName":null,"off":false,"on":true,"ok":true}
+  [PASS] 音量总线：setVolume 越界夹到 0~1、未知总线名被忽略   -> {"actx":false,"bus":null,"clampHi":1,"clampLo":0,"sfx":0.25,"ignored":true,"bgmName":null,"off":false,"on":true,"ok":true}
+  [PASS] BGM：无 AudioContext 时 syncBgm 不启动音乐，开关可切换   -> {"actx":false,"bus":null,"clampHi":1,"clampLo":0,"sfx":0.25,"ignored":true,"bgmName":null,"off":false,"on":true,"ok":true}
+  [PASS] BGM 谱面：title / battle 齐备且全部音符名有效   -> {"tracks":["title","battle"],"bad":[]}
+  [PASS] 快照协议：首帧带全量地图（m），第二帧只带增量（md）   -> {"firstFull":true,"firstNoDelta":true,"secondNoFull":true,"delta":[[2,4,0]],"len1":1798,"len2":403,"hit":[2,4],"pIsArr":true,"seq1":2,"seq2":3}
+  [PASS] 快照协议：实体改定长数组（p 为数组），seq 递增   -> {"firstFull":true,"firstNoDelta":true,"secondNoFull":true,"delta":[[2,4,0]],"len1":1798,"len2":403,"hit":[2,4],"pIsArr":true,"seq1":2,"seq2":3}
+  [PASS] 快照协议：增量只含被打掉的格子   -> [[2,4,0]]
+  [PASS] 快照瘦身：稳态快照不再携带整张地图（体积下降 > 600 字符）   -> {"first":1798,"next":403}
+  [PASS] 快照增量：客方应用 md 后地图同步且标记地形脏区   -> {"before":1,"after":0,"marked":true}
+  [PASS] 快照往返：位置/火力/武器/弹药/移动目标一致   -> {"px":137,"py":254,"pw":3,"gun":"laser","ammo":7,"mt":{"x":5,"y":6},"isP":true,"pd":null}
+  [PASS] 快照往返：子弹数组编码还原（含 owner.isPlayer）   -> {"px":10,"py":20,"power":2,"gun":"flame","ownerP":true,"arr":true}
+  [PASS] 快照增量：破坏超过 200 格时退回全量地图   -> {"full":true,"len":209}
+  [PASS] 延迟测量：按 ack 反查发送时刻（80 / 120ms），未知 seq 不覆盖   -> {"newest":80,"older":120,"unknownKeeps":120,"keep":16}
+  [PASS] 延迟测量：发送时刻环形缓冲有上限（16 帧 ≈ 0.8 秒窗口）   -> {"newest":80,"older":120,"unknownKeeps":120,"keep":16}
+  [PASS] 高关卡冒烟：BOSS 关 + 精英关 340 帧 update/render 无异常   -> null
+  [PASS] 高关卡冒烟：BOSS 关标签/地貌正确，精英关队列含 3 只精英   -> {"bossTag":"BOSS","theme5":"草原","eliteTag":"精英关","theme4":"草原","enemyCount":30}
+  [PASS] 生命图标：包含炮管 + 炮塔 + 车体，明确是坦克而非老鹰脸   -> {"barrel":true,"turret":true,"hull":true}
+
+=== 单元：net.js 重连状态机 ===
+  [PASS] connect 后建立 WebSocket 连接
+  [PASS] 首次连接触发 onOpen（发送 create）
+  [PASS] 掉线上报 net.offline
+  [PASS] 掉线后进入 net.reconnecting
+  [PASS] 重试后建立新连接
+  [PASS] 重连时带房间号与令牌发起 rejoin   -> {"type":"room","action":"rejoin","code":"ABCD","token":"TK1"}
+  [PASS] rejoin 成功上报 net.reconnected
+  [PASS] 主动 disconnect 不触发重连
+
+結果: 84/84 通過

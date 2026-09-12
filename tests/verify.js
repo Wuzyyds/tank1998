@@ -391,6 +391,31 @@ for (let i = 0; i < 200 && !sawWeapon; i++){
   if (WEAPON_TYPES.indexOf(t) >= 0) sawWeapon = true;
 }
 assert('K7 第 1 关 rollItemType 能开出武器', sawWeapon, '');
+
+/* ---------- L. 图鉴面板：按钮 + 分页切换 ---------- */
+const NO = () => {};
+const codexOv = document.getElementById('codex-overlay');
+function mkCxNode(n){ const o = { _n:n, _active:false, getAttribute:()=>n };
+  o.classList = { toggle:(c,on)=>{ if(c==='active') o._active = !!on; }, add:NO, remove:NO, contains:()=>false }; return o; }
+const cxTabs  = ['weapon','item','enemy','rule'].map(mkCxNode);
+const cxPanes = ['weapon','item','enemy','rule'].map(mkCxNode);
+codexOv.querySelectorAll = sel => sel === '.codex-tab' ? cxTabs : (sel === '.codex-pane' ? cxPanes : []);
+codexSwitchTab('enemy');
+const LpaneOk = cxPanes.find(p=>p._n==='enemy')._active && !cxPanes.find(p=>p._n==='weapon')._active;
+const LtabOk  = cxTabs.find(t=>t._n==='enemy')._active && !cxTabs.find(t=>t._n==='weapon')._active;
+assert('L1 图鉴切到「敌人」：对应 pane/tab 激活、其余未激活', LpaneOk && LtabOk,
+       JSON.stringify(cxPanes.map(p=>p._n+':'+p._active)));
+codexSwitchTab('rule');
+assert('L2 再切到「机制」：只 rule 激活',
+       cxPanes.find(p=>p._n==='rule')._active && !cxPanes.find(p=>p._n==='enemy')._active,
+       JSON.stringify(cxPanes.map(p=>p._n+':'+p._active)));
+// 按钮点击应显示覆盖层
+const cxBtn = document.getElementById('btn-codex');
+let cxShown = false;
+codexOv.classList = { toggle:(c,on)=>{ if(c==='show') cxShown = !!on; }, add:NO, remove:NO, contains:()=>false };
+const cxClick = (cxBtn.__h && cxBtn.__h.click) || [];
+if (cxClick.length) cxClick[0]();
+assert('L3 点击「图鉴」按钮显示覆盖层', cxShown === true, 'handlers=' + cxClick.length);
 `;
 
 let err = null;

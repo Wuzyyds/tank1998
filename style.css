@@ -84,6 +84,36 @@ footer { color:#565d66; font-size:12px; margin:10px 0 6px; text-align:center; }
 #btn-coop-close:hover { background:#30363d; }
 .coop-code-display { color:#7FD0FF; font-size:bold; font-size:22px; letter-spacing:6px; text-align:center;
   min-height:26px; margin:4px 0 6px; }
+/* 图鉴：武器 / 道具 / 敌人 / 机制 */
+#codex-overlay { z-index:60; }
+.codex-box { width:min(560px,94vw); max-height:86vh; display:flex; flex-direction:column;
+  background:#161B22; border:1px solid #30363d; border-radius:14px; padding:18px 18px 14px;
+  color:#c9d1d9; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+.codex-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.codex-head h2 { color:#f0c040; font-size:19px; letter-spacing:2px; margin:0; }
+.codex-close { background:#21262d; border:1px solid #30363d; color:#c9d1d9; border-radius:8px;
+  width:30px; height:30px; font-size:14px; cursor:pointer; line-height:1; }
+.codex-close:hover { background:#30363d; }
+.codex-tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+.codex-tab { background:#0d1117; border:1px solid #30363d; color:#8b949e; border-radius:8px;
+  padding:7px 14px; font-size:14px; cursor:pointer; font-family:inherit; }
+.codex-tab:hover { color:#c9d1d9; }
+.codex-tab.active { background:#1f6feb; border-color:#388bfd; color:#fff; }
+.codex-body { overflow-y:auto; padding-right:4px; }
+.codex-pane { display:none; }
+.codex-pane.active { display:block; }
+.cx-row { display:flex; gap:12px; padding:10px 0; border-bottom:1px solid #21262d; }
+.cx-row:last-child { border-bottom:none; }
+.cx-badge { flex:none; width:34px; height:34px; border-radius:8px; display:flex; align-items:center;
+  justify-content:center; font-size:15px; font-weight:bold; }
+.cx-badge-wide { width:auto; padding:0 10px; font-size:13px; }
+.cx-name { font-size:14.5px; color:#fff; font-weight:bold; }
+.cx-sub { font-size:11px; color:#8b949e; font-weight:normal; margin-left:6px; }
+.cx-tag { font-size:11px; color:#fff; background:#444; border-radius:4px; padding:1px 6px; margin-left:6px; }
+.cx-meta { font-size:12.5px; color:#7FD0FF; margin:2px 0; }
+.cx-desc { font-size:12.5px; color:#9aa4b0; line-height:1.6; }
+@media (pointer:coarse){ .codex-box { width:96vw; } .codex-tab { padding:10px 16px; font-size:15px; } }
+
 .coop-status { color:#FFD23F; font-size:13px; text-align:center; min-height:18px; line-height:1.5; }
 /* 无障碍：系统开启「减少动效」时关闭 CSS 过渡动画（配合 game.js 的闪烁降频） */
 @media (prefers-reduced-motion: reduce){

@@ -7,7 +7,7 @@
  * ========================================================= */
 'use strict';
 
-const VERSION = 'tank1998-v1.2.2';
+const VERSION = 'tank1998-v1.2.3';
 const SHELL = [
   './',
   './index.html',

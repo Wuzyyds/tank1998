@@ -2980,6 +2980,28 @@ if (volMaster) volMaster.addEventListener('input', e => { initAudio(); setVolume
 if (volSfx)    volSfx.addEventListener('input',    e => setVolume('sfx',    e.target.value / 100));
 if (volMusic)  volMusic.addEventListener('input',  e => setVolume('music',  e.target.value / 100));
 if (chkBgm)    chkBgm.addEventListener('change',   e => { initAudio(); setBgmOn(e.target.checked); });
+
+/* ---- 图鉴：武器 / 道具 / 敌人 / 机制（覆盖层 + 分页切换） ---- */
+const codexOverlay = document.getElementById('codex-overlay');
+const btnCodex     = document.getElementById('btn-codex');
+function showCodex(show){ if (!codexOverlay) return; codexOverlay.classList.toggle('show', show); if (btnCodex) btnCodex.classList.toggle('on', show); }
+function codexSwitchTab(name){
+  if (!codexOverlay || typeof codexOverlay.querySelectorAll !== 'function') return;
+  codexOverlay.querySelectorAll('.codex-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === name));
+  codexOverlay.querySelectorAll('.codex-pane').forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === name));
+}
+if (btnCodex) btnCodex.addEventListener('click', () => { initAudio(); showCodex(true); });
+if (codexOverlay){
+  const closeBtn = document.getElementById('btn-codex-close');
+  if (closeBtn) closeBtn.addEventListener('click', () => showCodex(false));
+  codexOverlay.addEventListener('click', e => { if (e.target === codexOverlay) showCodex(false); });
+  if (typeof codexOverlay.querySelectorAll === 'function'){
+    codexOverlay.querySelectorAll('.codex-tab').forEach(tab => {
+      tab.addEventListener('click', () => codexSwitchTab(tab.getAttribute('data-tab')));
+    });
+  }
+}
+window.addEventListener('keydown', e => { if (e.key === 'Escape'){ showCodex(false); } });
 function togglePause(){
   paused = !paused;
   btnPause.textContent = paused ? '▶ 继续' : '⏸ 暂停';

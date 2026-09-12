@@ -29,6 +29,7 @@
   <button id="btn-mute" data-page-node-id="gjqCYcV84yLEbnSYasK9qT">🔊 音效</button>
   <button id="btn-flash" title="减少画面闪烁（无障碍，遵循 WCAG 2.3.1）">⚡ 闪烁：正常</button>
   <button id="btn-set" title="主音量 / 音效 / 背景音乐">⚙ 设置</button>
+  <button id="btn-codex" title="武器 / 道具 / 敌人 / 机制图鉴">📖 图鉴</button>
   <button id="btn-pause" data-page-node-id="Wrt68IkW9tNx6zLWDzbmQB">⏸ 暂停</button>
 </div>
 <!-- 设置面板：分项音量（主/音效/音乐）+ 背景音乐开关，选择会持久化 -->
@@ -61,6 +62,161 @@
   </div>
   <div class="tbtn" id="pad-fire" data-k="Space" data-page-node-id="weQraFg2caTjD1kHe3pyBF">开火</div>
 </div>
+</div>
+<!-- 图鉴：武器 / 道具 / 敌人 / 机制 -->
+<div id="codex-overlay" class="overlay">
+  <div class="codex-box">
+    <div class="codex-head">
+      <h2>图鉴 · CODEX</h2>
+      <button id="btn-codex-close" class="codex-close">✕</button>
+    </div>
+    <div class="codex-tabs">
+      <button class="codex-tab active" data-tab="weapon">武器</button>
+      <button class="codex-tab" data-tab="item">道具</button>
+      <button class="codex-tab" data-tab="enemy">敌人</button>
+      <button class="codex-tab" data-tab="rule">机制</button>
+    </div>
+    <div class="codex-body">
+      <!-- 武器 -->
+      <div class="codex-pane active" data-pane="weapon">
+        <div class="cx-row"><span class="cx-badge" style="background:#FFE88A;color:#0d1117">普</span><div>
+          <div class="cx-name">普通弹 <span class="cx-tag">默认</span></div>
+          <div class="cx-meta">弹药 无限 · 弹速 1.0×</div>
+          <div class="cx-desc">初始武器。火力等级越高子弹越快、同屏弹数=等级；Lv2 可打穿钢板、Lv3 可蒸发水面。任何武器弹药耗尽会自动退回普通弹。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FF6A00;color:#fff">F</span><div>
+          <div class="cx-name">火焰枪 <span class="cx-tag" style="background:#FF6A00">火</span></div>
+          <div class="cx-meta">弹药 15 · 弹速 0.9×</div>
+          <div class="cx-desc">命中点燃，持续灼烧掉血；燃烧致死会传染给 1 格内敌人（最多 2 代、伤害减半）。玩家被烧不掉血，改为枪管过热。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#7FD0FF;color:#0d1117">C</span><div>
+          <div class="cx-name">冷冻枪 <span class="cx-tag" style="background:#7FD0FF;color:#0d1117">冰</span></div>
+          <div class="cx-meta">弹药 12 · 弹速 1.1×</div>
+          <div class="cx-desc">命中使敌人减速，创造输出窗口。无穿透、无额外伤害，弹速略快。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#B14BFF;color:#fff">L</span><div>
+          <div class="cx-name">激光枪 <span class="cx-tag" style="background:#B14BFF">激</span></div>
+          <div class="cx-meta">弹药 10 · 弹速 1.6×</div>
+          <div class="cx-desc">高速穿透 3 个敌人 + 钻穿 2 格砖墙；被钢板挡住（钢墙仍是绝对掩体）。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FFD23F;color:#0d1117">S</span><div>
+          <div class="cx-name">散弹枪 <span class="cx-tag" style="background:#FFD23F;color:#0d1117">散</span></div>
+          <div class="cx-meta">弹药 12 · 弹速 1.0×</div>
+          <div class="cx-desc">一次齐射 3 发 ±22° 扇形，只扣 1 次弹药；专门绕开「同屏弹数=火力等级」上限，卖点是覆盖面。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#46B455;color:#fff">H</span><div>
+          <div class="cx-name">追踪弹 <span class="cx-tag" style="background:#46B455">追</span></div>
+          <div class="cx-meta">弹药 8 · 弹速 0.85×</div>
+          <div class="cx-desc">自动追最近目标，转向上限 90°/秒、非必中；敌军被禁用（追踪+必杀过于劝退）。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#4FD1E0;color:#0d1117">T</span><div>
+          <div class="cx-name">电磁链 <span class="cx-tag" style="background:#4FD1E0;color:#0d1117">电</span></div>
+          <div class="cx-meta">弹药 10 · 弹速 1.0×</div>
+          <div class="cx-desc">命中后链式跳跃，最多跳 3 个目标、每次 1 伤害；跳跃不分敌我（敌人捡到会电到自己队友）。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#C7CDD4;color:#0d1117">D</span><div>
+          <div class="cx-name">穿甲钻 <span class="cx-tag" style="background:#C7CDD4;color:#0d1117">钻</span></div>
+          <div class="cx-meta">弹药 10 · 弹速 1.15×</div>
+          <div class="cx-desc">钻地最强：穿透 3 敌 + 钻穿 4 格砖墙；被钢板挡住。</div>
+        </div></div>
+      </div>
+      <!-- 道具 -->
+      <div class="codex-pane" data-pane="item">
+        <div class="cx-row"><span class="cx-badge" style="background:#F0C040;color:#0d1117">★</span><div>
+          <div class="cx-name">星星</div>
+          <div class="cx-desc">火力 +1（玩家上限 3 级；敌人封顶 2 级，避免蒸干水面拆地图）。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FF6A3D;color:#fff">💣</span><div>
+          <div class="cx-name">手雷</div>
+          <div class="cx-desc">玩家拾取 → 清屏所有敌人并加分；敌人拾取 → 在脚下埋雷（红圈预警，3 格半径）。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#4FD1E0;color:#0d1117">🛡</span><div>
+          <div class="cx-name">护盾</div>
+          <div class="cx-desc">短暂无敌：玩家 12 秒 / 敌人 6 秒。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#B14BFF;color:#fff">⏱</span><div>
+          <div class="cx-name">时钟</div>
+          <div class="cx-desc">冻结敌方 10 秒；敌人吃了则冻玩家 4 秒。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#46B455;color:#fff">🟢</span><div>
+          <div class="cx-name">坦克</div>
+          <div class="cx-desc">加 1 条命（上限 6）；敌人吃了则增援。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#7FD0FF;color:#0d1117">🌊</span><div>
+          <div class="cx-name">两栖</div>
+          <div class="cx-desc">可水上行走：玩家 60 秒 / 敌人 20 秒。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FFC300;color:#0d1117">🦅</span><div>
+          <div class="cx-name">老鹰</div>
+          <div class="cx-desc">基地/玩家 60 秒无敌（重复拾取重置计时器，不叠加）；敌方退化成 6 秒护盾。</div>
+        </div></div>
+      </div>
+      <!-- 敌人 -->
+      <div class="codex-pane" data-pane="enemy">
+        <div class="cx-row"><span class="cx-badge" style="background:#C8CCD2;color:#0d1117">基</span><div>
+          <div class="cx-name">普通兵 <span class="cx-sub">basic</span></div>
+          <div class="cx-meta">速度 1.6 · 血量 1 · 100 分</div>
+          <div class="cx-desc">标准杂兵，构成敌人主力。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#7FD0FF;color:#0d1117">速</span><div>
+          <div class="cx-name">快速兵 <span class="cx-sub">fast</span></div>
+          <div class="cx-meta">速度 3.4 · 血量 1 · 200 分</div>
+          <div class="cx-desc">跑得最快，靠机动绕后偷家。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FF8A6B;color:#0d1117">力</span><div>
+          <div class="cx-name">火力兵 <span class="cx-sub">power</span></div>
+          <div class="cx-meta">速度 2.1 · 血量 2 · 300 分</div>
+          <div class="cx-desc">2 血更耐打，开火频率高。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#F0F0F0;color:#0d1117">甲</span><div>
+          <div class="cx-name">装甲兵 <span class="cx-sub">armor</span></div>
+          <div class="cx-meta">速度 1.2 · 血量 4 · 400 分</div>
+          <div class="cx-desc">4 血硬抗，靠肉度顶在前面。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FF3B30;color:#fff">红</span><div>
+          <div class="cx-name">道具兵 <span class="cx-sub">bonus</span></div>
+          <div class="cx-meta">速度 2.2 · 血量 1 · 500 分</div>
+          <div class="cx-desc">红色，击杀必掉一个道具——优先集火。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#B14BFF;color:#fff">王</span><div>
+          <div class="cx-name">首领 BOSS <span class="cx-sub">boss</span></div>
+          <div class="cx-meta">速度 1.05 · 血量 10 · 2000 分</div>
+          <div class="cx-desc">每档第 5 关（BOSS 关）压轴，紫色、必掉双道具、伤害高。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge cx-badge-wide" style="background:#30363D;color:#FF8A6B">阶梯</span><div>
+          <div class="cx-name">难度阶梯 & 精英关</div>
+          <div class="cx-desc">每 5 关一档：新兵→老兵→精锐→王牌→噩梦，速度/血量/AI/总数逐档提升。每档第 4 关为精英关（前插装甲/火力精英），第 5 关为 BOSS 关。</div>
+        </div></div>
+      </div>
+      <!-- 机制 -->
+      <div class="codex-pane" data-pane="rule">
+        <div class="cx-row"><span class="cx-badge" style="background:#F0C040;color:#0d1117">火</span><div>
+          <div class="cx-name">火力等级 Lv1 / 2 / 3</div>
+          <div class="cx-desc">子弹更快、同屏弹数=等级；Lv2 可打穿钢板、Lv3 可蒸发水面。吃星星升级、阵亡归 1 级。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FF8A6B;color:#0d1117">盾</span><div>
+          <div class="cx-name">火力护盾</div>
+          <div class="cx-desc">玩家拥有 Lv2/Lv3 火力时，被子弹或电磁链命中会先降一级火力抵销本次伤害；Lv1 时恢复为正常掉血。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#46B455;color:#fff">命</span><div>
+          <div class="cx-name">命数</div>
+          <div class="cx-desc">初始 2 条命；得分每满 2000 分奖 1 条命（上限 6）。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#7FD0FF;color:#0d1117">落</span><div>
+          <div class="cx-name">武器掉落</div>
+          <div class="cx-desc">所有关卡均可能掉落；武器池占 50%（其余为经典道具），让玩家更容易遇到 7 种武器。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#B14BFF;color:#fff">撞</span><div>
+          <div class="cx-name">子弹相撞</div>
+          <div class="cx-desc">等级高者吞掉低者并降级，同级同归于尽；一次交火最多被削一级，防止被杂兵弹幕稀释。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FFC300;color:#0d1117">鹰</span><div>
+          <div class="cx-name">基地老鹰</div>
+          <div class="cx-desc">被击中即游戏结束；可用「老鹰」道具保 60 秒无敌。老鹰 2×2 格，始终完整绘制。</div>
+        </div></div>
+      </div>
+    </div>
+  </div>
 </div>
 <!-- 双人合作：房间创建 / 加入 -->
 <div id="coop-overlay" class="overlay">
