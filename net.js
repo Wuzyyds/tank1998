@@ -127,6 +127,11 @@
       return !!(this._ws && this._ws.readyState === 1 /* OPEN */);
     },
 
+    /* 上行积压字节数：房主端据此做背压（积压时跳过一次快照），弱网下避免雪崩 */
+    bufferedAmount() {
+      return (this._ws && this._ws.bufferedAmount) || 0;
+    },
+
     disconnect() {
       this._intentional = true;
       this._mode = 'off';

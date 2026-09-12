@@ -104,6 +104,12 @@ async function integration() {
     const swRes = await fetch('http://127.0.0.1:' + PORT + '/sw.js');
     assert('Service Worker 可访问', swRes.status === 200 && (swRes.headers.get('content-type') || '').indexOf('javascript') >= 0, swRes.status);
 
+    // 页面结构：设置面板（分项音量）与手机端 HUD 的武器栏必须存在，否则静默失效
+    const html = await (await fetch('http://127.0.0.1:' + PORT + '/')).text();
+    const need = ['id="set-panel"', 'id="btn-set"', 'id="vol-master"', 'id="vol-sfx"', 'id="vol-music"', 'id="chk-bgm"', 'id="hud-weapon"'];
+    const missing = need.filter(s => html.indexOf(s) < 0);
+    assert('index.html 含设置面板与 HUD 武器栏（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
+
     // 掉线通知：关闭客方，房主应收到 peer.dropped
     const dropP = waitMsg(H, m => m.type === 'peer' && m.event === 'dropped', 3000);
     G.close();
@@ -227,6 +233,105 @@ function unit() {
   assert('DOM HUD：分数补零为 6 位', hud.score === '001234', JSON.stringify(hud));
   assert('DOM HUD：生命/关卡/火力/敌余同步正确', hud.lives === '♥♥' && hud.level === '07' && hud.power === 'Lv3' && hud.enemy === '02', JSON.stringify(hud));
   assert('DOM HUD：非触屏环境不启用（coarsePointer=false，桌面走 canvas 面板）', hud.coarse === false);
+
+  // 重开一局必须重置火力等级（基地被摧毁 / 生命耗尽后重开，不能带着上一局的火力）
+  const fresh = vm.runInContext("(function(){ netMode='off'; player2=null; player.power=3; level=5; lives=1; startGame(); return {pow: player.power, lvl: level, lives: lives}; })()", context);
+  assert('重开一局：火力等级回到 1 级（不再继承上局）', fresh.pow === 1, JSON.stringify(fresh));
+  assert('重开一局：关卡回到 01 且命数重置为 3', fresh.lvl === 1 && fresh.lives === 3, JSON.stringify(fresh));
+
+  // 完整复现用户报的场景：打到第 2 关（火力 Lv3）基地被摧毁 → GAME OVER → 点按重开
+  const replay = vm.runInContext("(function(){ netMode='off'; player2=null; startGame(); level=2; player.power=3; player.gun='laser'; player.ammo=5; destroyBase(); var st1 = state; gameTime += 2; requestStart(); return { st1: st1, st2: state, pow: player.power, lvl: level, gun: player.gun, ammo: player.ammo }; })()", context);
+  assert('基地被摧毁 → 点按重开：状态恢复 playing 且火力回到 Lv1', replay.st1 === 'over' && replay.st2 === 'playing' && replay.pow === 1, JSON.stringify(replay));
+  assert('基地被摧毁 → 点按重开：关卡回到 01、武器清空为普通弹', replay.lvl === 1 && replay.gun === 'normal' && replay.ammo === 0, JSON.stringify(replay));
+
+  // 武器字母标识：7 种武器全覆盖且互不重复
+  const wl = vm.runInContext("(function(){ var miss = WEAPON_TYPES.filter(function(t){ return !WEAPON_LETTER[t]; }); var seen = {}, dup = []; WEAPON_TYPES.forEach(function(t){ var L = WEAPON_LETTER[t]; if (seen[L]) dup.push(L); seen[L] = 1; }); return {total: WEAPON_TYPES.length, miss: miss, dup: dup, ls: WEAPON_LETTER.laser + WEAPON_LETTER.spread}; })()", context);
+  assert('武器字母：7 种武器均有字母标识', wl.total === 7 && wl.miss.length === 0, JSON.stringify(wl));
+  assert('武器字母：字母唯一（激光=L 散弹=S）', wl.dup.length === 0 && wl.ls === 'LS', JSON.stringify(wl));
+
+  // 地图上的武器道具绘制字母（而非 20x20 矢量小图标）
+  const wi = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText, txt = []; c.fillText = function(t){ txt.push(String(t)); }; drawItem({x:1,y:1,t:0,type:'flame'}); drawItem({x:1,y:1,t:0,type:'drill'}); c.fillText = orig; return txt; })()", context);
+  assert('武器道具：地图上绘制字母 F / D', wi.indexOf('F') >= 0 && wi.indexOf('D') >= 0, JSON.stringify(wi));
+
+  // 结束 / 标题 / 过关界面排版：逐行累加 y，行与行不得重叠（曾出现「点按屏幕」压住「得分」）
+  const ovl = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText; function cap(fn){ var rec = []; c.fillText = function(t,x,y){ rec.push({ t:String(t), y:y }); }; fn(); c.fillText = orig; return rec; } return { over: cap(drawOver), title: cap(drawTitle), clear: cap(drawClear) }; })()", context);
+  const gapsOk = arr => arr.length >= 3 && arr.every((r, i) => i === 0 || (r.y - arr[i-1].y) >= 20);
+  assert('GAME OVER 排版：4 行递增且行距充足（得分不被提示覆盖）', ovl.over.length === 4 && gapsOk(ovl.over), JSON.stringify(ovl.over));
+  assert('标题 / 过关排版：行与行不重叠', gapsOk(ovl.title) && gapsOk(ovl.clear), JSON.stringify({ title: ovl.title.length, clear: ovl.clear.length }));
+
+  // 地形离屏缓存：开局整张重建一次，之后无变化零重绘；打掉一块砖只重画 3x3 邻域
+  const tc = vm.runInContext("(function(){ netMode='off'; player2=null; startGame(); var c = canvas.getContext('2d'); var oF = c.fillRect, n = 0; c.fillRect = function(){ n++; }; flushTerrain(); var full = n; n = 0; flushTerrain(); var idle = n; n = 0; render(); n = 0; flushTerrain(); var afterRender = n; n = 0; var hit = null; for (var r = 1; r < ROWS - 1 && !hit; r++) for (var cc = 1; cc < COLS - 1; cc++){ if (map[r][cc] !== BRICK) continue; var nb = 0; for (var dr = -1; dr <= 1; dr++) for (var dc = -1; dc <= 1; dc++){ if (!dr && !dc) continue; if (isTerrainCacheable(map[r+dr][cc+dc])) nb++; } if (nb > 0){ hit = [r, cc]; break; } } var boxes = []; c.fillRect = function(x,y,w,h){ n++; boxes.push([x,y,w,h]); }; if (hit) setTile(hit[0], hit[1], EMPTY); flushTerrain(); c.fillRect = oF; var outOfRange = hit ? boxes.filter(function(b){ return b[0] < (hit[1]-1)*TILE - 0.01 || b[1] < (hit[0]-1)*TILE - 0.01 || b[0]+b[2] > (hit[1]+2)*TILE + 0.01 || b[1]+b[3] > (hit[0]+2)*TILE + 0.01; }).length : 0; return { full: full, idle: idle, afterRender: afterRender, dirty: n, hit: hit, outOfRange: outOfRange, tile: map[hit[0]][hit[1]] }; })()", context);
+  assert('地形缓存：开局整张重建（>100 个矩形）', tc.full > 100, JSON.stringify({ full: tc.full }));
+  assert('地形缓存：无变化时零重绘（idle=0，render 后仍为 0）', tc.idle === 0 && tc.afterRender === 0, JSON.stringify(tc));
+  assert('地形缓存：打掉一块砖只重画 3x3 邻域（矩形不越界，且确实有重绘）', tc.dirty > 0 && tc.dirty < tc.full && tc.outOfRange === 0 && tc.tile === 0, JSON.stringify(tc));
+
+  // 难度阶梯：每 5 关一档，第 4 关精英、第 5 关 BOSS
+  const tierInfo = vm.runInContext("(function(){ var o = {}; level = 1; o.t1 = tier().name; level = 6; o.t6 = tier().name; level = 11; o.t11 = tier().name; level = 21; o.t21 = tier().name; level = 40; o.t40 = tier().name; level = 4; o.elite4 = isEliteLevel(); o.boss4 = isBossLevel(); level = 5; o.boss5 = isBossLevel(); o.elite5 = isEliteLevel(); level = 9; o.elite9 = isEliteLevel(); return o; })()", context);
+  assert('难度阶梯：每 5 关一档（1 新兵 / 6 老兵 / 11 精锐 / 21 噩梦，超过 5 档封顶）', tierInfo.t1 === '新兵' && tierInfo.t6 === '老兵' && tierInfo.t11 === '精锐' && tierInfo.t21 === '噩梦' && tierInfo.t40 === '噩梦', JSON.stringify(tierInfo));
+  assert('关卡标签：第 4 关=精英关、第 5 关=BOSS、第 9 关=精英关', tierInfo.elite4 === true && tierInfo.boss4 === false && tierInfo.boss5 === true && tierInfo.elite5 === false && tierInfo.elite9 === true, JSON.stringify(tierInfo));
+
+  // 难度参数确实随档位变化（旧实现 8~10 关后就全部封顶）
+  const diff = vm.runInContext("(function(){ level = 1; var a = { spd: enemySpeedMul(), hp: makeTank(1,1,0,'basic',{}).hp, total: buildQueue().length }; level = 21; var b = { spd: enemySpeedMul(), hp: makeTank(1,1,0,'basic',{}).hp, total: buildQueue().length, bossHp: makeTank(1,1,0,'boss',{}).hp, smart: TIERS[4].smart }; return { a: a, b: b }; })()", context);
+  assert('难度：1 关基础敌人 1 血 / 速度 x1.0 / 队列 24', diff.a.hp === 1 && diff.a.spd === 1 && diff.a.total === 24, JSON.stringify(diff));
+  assert('难度：21 关（噩梦）基础敌人 3 血 / 速度 x1.32 / 队列 35', diff.b.hp === 3 && diff.b.spd === 1.32 && diff.b.total === 35, JSON.stringify(diff));
+  assert('难度：BOSS 不吃档位加血（固定 10 血）', diff.b.bossHp === 10, JSON.stringify(diff));
+
+  // BOSS 关首领压轴；精英关前段插入 3 只精英
+  const q5 = vm.runInContext("(function(){ level = 5; var q = buildQueue(); return { last: q[q.length-1], bossCount: q.filter(function(k){ return k==='boss'; }).length }; })()", context);
+  assert('BOSS 关：队列末尾追加首领，且全场只有 1 只', q5.last === 'boss' && q5.bossCount === 1, JSON.stringify(q5));
+  const q4 = vm.runInContext("(function(){ level = 4; var q = buildQueue(); var head = q.slice(0, 8); return { elite: head.filter(function(k){ return k==='armor' || k==='power'; }).length, hasBoss: q.indexOf('boss') >= 0 }; })()", context);
+  assert('精英关：队列前段插入 3 只精英，且无 BOSS', q4.elite === 3 && q4.hasBoss === false, JSON.stringify(q4));
+
+  // 关卡主题：5 个档位对应 5 种地貌并循环
+  const th = vm.runInContext("(function(){ return [1,6,11,16,21,26].map(function(l){ return themeForLevel(l).name; }); })()", context);
+  assert('关卡主题：每 5 关换一种地貌并循环（草原→沙漠→雪原→沼泽→钢铁→草原）', th.join(',') === '草原,沙漠,雪原,沼泽,钢铁,草原', JSON.stringify(th));
+
+  // 首领阵亡必掉双道具
+  const bd = vm.runInContext("(function(){ level = 5; items = []; var b = makeTank(3,3,0,'boss',{}); b.hp = 1; damageTank(b, 1, 'test'); return { dead: b.dead, dropped: items.length, score: b.score }; })()", context);
+  assert('首领阵亡：掉落 2 个道具（force 越过同屏 3 上限），得分 2000', bd.dead === true && bd.dropped === 2 && bd.score === 2000, JSON.stringify(bd));
+
+  // 音量总线 / BGM：无 AudioContext 时必须全部是安全空操作（Node 测试环境）
+  const av = vm.runInContext("(function(){ var o = {}; o.actx = !!actx; o.bus = masterGain; setVolume('master', 2); o.clampHi = VOL.master; setVolume('master', -1); o.clampLo = VOL.master; setVolume('sfx', 0.25); o.sfx = VOL.sfx; setVolume('bogus', 0.5); o.ignored = (VOL.bogus === undefined); syncBgm(); o.bgmName = bgmName; setBgmOn(false); o.off = bgmOn; setBgmOn(true); o.on = bgmOn; applyVolumes(); o.ok = true; return o; })()", context);
+  assert('音量总线：无 AudioContext 时不报错且总线未创建', av.actx === false && av.bus === null && av.ok === true, JSON.stringify(av));
+  assert('音量总线：setVolume 越界夹到 0~1、未知总线名被忽略', av.clampHi === 1 && av.clampLo === 0 && av.sfx === 0.25 && av.ignored === true, JSON.stringify(av));
+  assert('BGM：无 AudioContext 时 syncBgm 不启动音乐，开关可切换', av.bgmName === null && av.off === false && av.on === true, JSON.stringify(av));
+
+  // BGM 谱面完整性：曲目齐备、所有音符名都在 NOTE 表内（避免出现静音轨道）
+  const mus = vm.runInContext("(function(){ var bad = []; for (var k in BGM){ [BGM[k].lead, BGM[k].bass].forEach(function(seq){ seq.split(' ').forEach(function(n){ if (n === '.' || n === '-') return; if (!NOTE[n]) bad.push(k + ':' + n); }); }); } return { tracks: Object.keys(BGM), bad: bad }; })()", context);
+  assert('BGM 谱面：title / battle 齐备且全部音符名有效', mus.tracks.length === 2 && mus.tracks.indexOf('title') >= 0 && mus.tracks.indexOf('battle') >= 0 && mus.bad.length === 0, JSON.stringify(mus));
+
+  // 快照瘦身：首帧全量地图，之后只发变化格子；实体改用定长数组
+  const slim = vm.runInContext("(function(){ netMode='host'; player2=null; startGame(); var s1 = serializeSnapshot(); var h1 = JSON.stringify(s1).length; var hit = null; for (var r = 1; r < ROWS-1 && !hit; r++) for (var c = 1; c < COLS-1; c++){ if (map[r][c] === BRICK){ hit = [r,c]; break; } } setTile(hit[0], hit[1], EMPTY); var s2 = serializeSnapshot(); var h2 = JSON.stringify(s2).length; return { firstFull: !!s1.m, firstNoDelta: s1.md === undefined, secondNoFull: s2.m === undefined, delta: s2.md, len1: h1, len2: h2, hit: hit, pIsArr: Array.isArray(s1.p), seq1: s1.seq, seq2: s2.seq }; })()", context);
+  assert('快照协议：首帧带全量地图（m），第二帧只带增量（md）', slim.firstFull === true && slim.firstNoDelta === true && slim.secondNoFull === true, JSON.stringify(slim));
+  assert('快照协议：实体改定长数组（p 为数组），seq 递增', slim.pIsArr === true && slim.seq2 === slim.seq1 + 1, JSON.stringify(slim));
+  assert('快照协议：增量只含被打掉的格子', slim.delta.length === 1 && slim.delta[0][0] === slim.hit[0] && slim.delta[0][1] === slim.hit[1] && slim.delta[0][2] === 0, JSON.stringify(slim.delta));
+  assert('快照瘦身：稳态快照不再携带整张地图（体积下降 > 600 字符）', slim.len2 < slim.len1 && (slim.len1 - slim.len2) > 600, JSON.stringify({ first: slim.len1, next: slim.len2 }));
+
+  // 客方按 md 应用单格变化，并标记地形脏区（否则画面不刷新）
+  const cli = vm.runInContext("(function(){ netMode='host'; startGame(); var r = 3, c = 3; map[r][c] = BRICK; var s = serializeSnapshot(); applySnapshot(s); var before = map[r][c]; for (var k in terrainDirty) delete terrainDirty[k]; terrainDirtyCount = 0; applySnapshot({ s:'playing', lvl:1, score:9, lives:3, lives2:3, fe:0, fp:0, pe:0, li:0, base:1, p: tankArr(player), p2: null, e: [], b: [], it: [], ex: [], gb: [], md: [[r, c, 0]] }); return { before: before, after: map[r][c], marked: terrainDirty[r + ',' + c] === true }; })()", context);
+  assert('快照增量：客方应用 md 后地图同步且标记地形脏区', cli.before === 1 && cli.after === 0 && cli.marked === true, JSON.stringify(cli));
+
+  // 往返一致性：位置 / 火力 / 武器 / 弹药 等字段经数组编码后不变
+  const rt = vm.runInContext("(function(){ netMode='off'; player2=null; player.px = 137; player.py = 254; player.power = 3; player.gun = 'laser'; player.ammo = 7; player.movingTo = { x: 5, y: 6 }; var s = serializeSnapshot(); applySnapshot(s); return { px: player.px, py: player.py, pw: player.power, gun: player.gun, ammo: player.ammo, mt: player.movingTo, isP: player.isPlayer, pd: player.pendingDir }; })()", context);
+  assert('快照往返：位置/火力/武器/弹药/移动目标一致', rt.px === 137 && rt.py === 254 && rt.pw === 3 && rt.gun === 'laser' && rt.ammo === 7 && rt.mt && rt.mt.x === 5 && rt.mt.y === 6 && rt.isP === true && rt.pd === null, JSON.stringify(rt));
+
+  // 子弹同样用数组编码，owner.isPlayer 需还原
+  const rb = vm.runInContext("(function(){ netMode='off'; bullets = [{ px:10, py:20, x:0, y:1, dir:1, ang:null, power:2, gun:'flame', owner:{isPlayer:true}, kind:null }]; var s = serializeSnapshot(); applySnapshot(s); var b = bullets[0]; return { px: b.px, py: b.py, power: b.power, gun: b.gun, ownerP: b.owner.isPlayer, arr: Array.isArray(s.b[0]) }; })()", context);
+  assert('快照往返：子弹数组编码还原（含 owner.isPlayer）', rb.arr === true && rb.px === 10 && rb.py === 20 && rb.power === 2 && rb.gun === 'flame' && rb.ownerP === true, JSON.stringify(rb));
+
+  // 破坏格子过多 → 退回全量地图，避免增量包无限增长
+  const ovf = vm.runInContext("(function(){ snapFullNeeded = false; tileDelta = []; for (var i = 0; i < 210; i++) setTile(0, 0, i % 2 ? 1 : 0); return { full: snapFullNeeded, len: tileDelta.length }; })()", context);
+  assert('快照增量：破坏超过 200 格时退回全量地图', ovf.full === true, JSON.stringify(ovf));
+
+  // 延迟测量：客方回带 ack，在最近若干帧的发送时刻里反查（ack 常晚于最新帧到达）
+  const rtt = vm.runInContext("(function(){ netMode = 'host'; var t0 = performance.now(); snapPing = [[5, t0 - 200], [6, t0 - 120], [7, t0 - 80]]; coopHandleMsg({ type:'input', k:0, ack:7 }); var a = coopRtt; coopHandleMsg({ type:'input', k:0, ack:6 }); var b = coopRtt; coopHandleMsg({ type:'input', k:0, ack:999 }); return { newest: a, older: b, unknownKeeps: coopRtt, keep: SNAP_PING_KEEP }; })()", context);
+  assert('延迟测量：按 ack 反查发送时刻（80 / 120ms），未知 seq 不覆盖', rtt.newest === 80 && rtt.older === 120 && rtt.unknownKeeps === 120, JSON.stringify(rtt));
+  assert('延迟测量：发送时刻环形缓冲有上限（16 帧 ≈ 0.8 秒窗口）', rtt.keep === 16, JSON.stringify(rtt));
+
+  // 高关卡冒烟：BOSS 关 / 精英关连续跑帧（含地形缓存、字母道具、BOSS 血条、幕布标签）
+  const smoke = vm.runInContext("(function(){ var err = null, out = {}; try { netMode = 'off'; player2 = null; startGame(); level = 5; startLevel(); enemies = [makeTank(6, 3, 2, 'boss', {invuln:0})]; enemies[0].hp = 7; enemyQueue = ['armor','power','bonus']; items = [{x:5,y:5,px:110,py:110,type:'laser',t:0,dead:false}]; for (var i = 0; i < 220; i++){ gameTime += 0.016; update(0.016); render(); syncBgm(); } out.bossTag = levelTag(); out.theme5 = levelThemeName; level = 4; startLevel(); for (var j = 0; j < 120; j++){ gameTime += 0.016; update(0.016); render(); } out.eliteTag = levelTag(); out.theme4 = levelThemeName; out.enemyCount = enemyQueue.length; } catch(e){ err = e.message + ' @ ' + (e.stack || '').split('\\n')[1]; } return { err: err, out: out }; })()", context);
+  assert('高关卡冒烟：BOSS 关 + 精英关 340 帧 update/render 无异常', smoke.err === null, String(smoke.err));
+  assert('高关卡冒烟：BOSS 关标签/地貌正确，精英关队列含 3 只精英', smoke.err === null && smoke.out.bossTag === 'BOSS' && smoke.out.theme5 === '草原' && smoke.out.eliteTag === '精英关' && smoke.out.theme4 === '草原' && smoke.out.enemyCount >= 3, JSON.stringify(smoke.out));
 }
 
 /* ---------- 单元：net.js 重连状态机（用假 WebSocket + 可控定时器） ---------- */

@@ -28,7 +28,16 @@
   <button id="btn-fs" data-page-node-id="AmEndVbNzWxRjVARJ950Wl">🔲 全屏</button>
   <button id="btn-mute" data-page-node-id="gjqCYcV84yLEbnSYasK9qT">🔊 音效</button>
   <button id="btn-flash" title="减少画面闪烁（无障碍，遵循 WCAG 2.3.1）">⚡ 闪烁：正常</button>
+  <button id="btn-set" title="主音量 / 音效 / 背景音乐">⚙ 设置</button>
   <button id="btn-pause" data-page-node-id="Wrt68IkW9tNx6zLWDzbmQB">⏸ 暂停</button>
+</div>
+<!-- 设置面板：分项音量（主/音效/音乐）+ 背景音乐开关，选择会持久化 -->
+<div id="set-panel">
+  <label class="set-row"><span>主音量</span><input type="range" id="vol-master" min="0" max="100" step="5" value="80"></label>
+  <label class="set-row"><span>音效</span><input type="range" id="vol-sfx" min="0" max="100" step="5" value="90"></label>
+  <label class="set-row"><span>音乐</span><input type="range" id="vol-music" min="0" max="100" step="5" value="45"></label>
+  <label class="set-row chk"><input type="checkbox" id="chk-bgm" checked><span>播放背景音乐</span></label>
+  <div class="set-tip">背景音乐为程序实时生成，不额外下载素材；以上设置会自动记住。</div>
 </div>
 <div id="wrap" data-page-node-id="3u7joqQMIewsonERqcJzxo">
 <canvas id="game" width="680" height="520" data-page-node-id="ikkSJFuA69Y8OMU0x7AWrN"></canvas>
@@ -39,6 +48,7 @@
   <span class="hud-i p2"><i>P2</i><b id="hud-lives2">♥♥♥</b></span>
   <span class="hud-i"><i>关</i><b id="hud-level">01</b></span>
   <span class="hud-i power"><i>火</i><b id="hud-power">Lv1</b></span>
+  <span class="hud-i wpn"><i>武</i><b id="hud-weapon">—</b></span>
   <span class="hud-i"><i>敌</i><b id="hud-enemy">20</b></span>
 </div>
 <div id="touchpad" data-page-node-id="FA3nSc6AfkJk2CqukGGs68">

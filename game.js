@@ -60,7 +60,31 @@ const ETYPES = {
   power: { speed:2.1, hp:2, score:300, fire:1.3, body:'#FF8A6B', dark:'#B03E20' },
   armor: { speed:1.2, hp:4, score:400, fire:3.2, body:'#F0F0F0', dark:'#A8A8A8' },
   bonus: { speed:2.2, hp:1, score:500, fire:1.8, body:'#FF3B30', dark:'#8E1B14' }, // 红色道具敌人
+  boss:  { speed:1.05, hp:10, score:2000, fire:0.9, body:'#B14BFF', dark:'#5B2185' }, // BOSS 关首领
 };
+
+/* ================= 难度阶梯（每 5 关一档） =================
+ * 旧实现是一条平滑曲线：速度 ×1.6 封顶、每 3 关 +1 血封顶 +2、AI 命中率 0.92 封顶，
+ * 于是第 8~10 关之后所有参数都到顶，敌人数也固定 20，再无新挑战。
+ * 改为「档位表」：每 5 关整体抬升一档（敌人池 / 速度 / 血量 / AI / 总数），
+ *   每档第 4 关 = 精英关（队列前段插入精英，开场即有压迫感）
+ *   每档第 5 关 = BOSS 关（末尾追加首领，高血高伤、必掉双道具）
+ * 配合关卡主题（见 THEMES），5 个档位对应 5 种地貌。 */
+const TIER_SPAN = 5;
+const TIERS = [
+  { name:'新兵', speed:1.00, hp:0, smart:0.55, total:20, pool:['basic','basic','basic','fast','basic'] },
+  { name:'老兵', speed:1.08, hp:0, smart:0.66, total:22, pool:['basic','basic','fast','power','fast'] },
+  { name:'精锐', speed:1.16, hp:1, smart:0.76, total:24, pool:['basic','fast','power','armor','fast'] },
+  { name:'王牌', speed:1.24, hp:1, smart:0.84, total:26, pool:['fast','power','power','armor','fast'] },
+  { name:'噩梦', speed:1.32, hp:2, smart:0.92, total:28, pool:['fast','power','armor','power','armor'] },
+];
+function tierIndex(){ return Math.min(TIERS.length - 1, Math.floor((level - 1) / TIER_SPAN)); }
+function tier(){ return TIERS[tierIndex()]; }
+function isBossLevel(){ return level % TIER_SPAN === 0; }
+function isEliteLevel(){ return !isBossLevel() && (level % TIER_SPAN) === TIER_SPAN - 1; }
+function levelTag(){ return isBossLevel() ? 'BOSS' : (isEliteLevel() ? '精英关' : tier().name); }
+const ELITE_TYPES = ['armor', 'power'];
+const ELITE_COUNT = 3;
 const ITEM_TYPES = ['star','grenade','shield','clock','tank','amphibious','eagle'];
 const ITEM_WEIGHT = [26, 12, 18, 14, 10, 20, 8];
 const GUN_NAMES = ['普通弹', '穿甲弹', '毁灭弹'];
@@ -86,6 +110,9 @@ const WEAPON_TYPES  = ['flame','frost','laser','spread','homing','tesla','drill'
 const WEAPON_WEIGHT = [22, 20, 14, 16, 10, 10, 8];   // 总 100
 const WEAPON_RING = { flame:'#FF6A00', frost:'#7FD0FF', laser:'#B14BFF',
                       spread:'#FFD23F', homing:'#46B455', tesla:'#4FD1E0', drill:'#C7CDD4' };
+/* 武器道具的字母标识：地图上的武器格子直接显示字母，比矢量小图标更快辨认
+ * F火焰枪 C冷冻枪 L激光枪 S散弹枪 H追踪弹 T电磁链 D穿甲钻 */
+const WEAPON_LETTER = { flame:'F', frost:'C', laser:'L', spread:'S', homing:'H', tesla:'T', drill:'D' };
 const CLASSIC_POOL_RATE = 0.7;   // 经典道具池占比（武器占 30%，避免稀释火力成长）
 const WEAPON_UNLOCK_LEVEL = 2;   // 第 1 关保持纯经典手感，第 2 关起掉落武器
 const ENEMY_NO_GUN = { homing: 1 };  // 追踪 + 一击必死过于劝退，敌军无法使用
@@ -98,7 +125,89 @@ const pick = arr => arr[(Math.random() * arr.length) | 0];
 
 /* ================= 画布 ================= */
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+let ctx = canvas.getContext('2d');   // 绘制地形缓存时需临时切到离屏上下文，故用 let
+
+/* ================= 地形离屏缓存 + 脏区重绘 =================
+ * 砖 / 钢 / 沙 / 沼 / 雪 / 基地 在一关内基本不变，原先却每帧重画 676 个格子。
+ * 改为预渲染到离屏画布，只在格子真正变化（打穿砖墙、蒸发水面、基地被毁）时重画那一小块，
+ * 移动端每帧的 fillRect 数量下降一个数量级。
+ * 水（波纹动画）与树（必须盖住坦克）不进缓存，仍每帧绘制。 */
+let terrainCanvas = null, terrainCtx = null;
+let terrainFull = true;                  // 需要整张重建
+let terrainDirty = Object.create(null);  // 脏格集合："r,c" -> true
+let terrainDirtyCount = 0;
+/* 网络地图增量（详见「双人合作：网络同步」）：与本文件的脏区机制同源，
+ * 声明放在最前面，避免 setTile 在初始化阶段被调用时踩到 TDZ。 */
+let tileDelta = [];
+let snapFullNeeded = true;
+
+function isTerrainCacheable(v){
+  return v === BRICK || v === STEEL || v === DESERT || v === SWAMP || v === SNOW || v === BASE;
+}
+function initTerrain(){
+  if (!terrainCanvas){
+    terrainCanvas = document.createElement('canvas');
+    terrainCtx = terrainCanvas.getContext('2d');
+  }
+  terrainCanvas.width  = PLAY_W * DPR;
+  terrainCanvas.height = PLAY_H * DPR;
+  terrainFull = true;
+  terrainDirty = Object.create(null);
+  terrainDirtyCount = 0;
+}
+function markTileDirty(r, c){
+  if (r < 0 || c < 0 || r >= ROWS || c >= COLS) return;
+  const k = r + ',' + c;
+  if (!terrainDirty[k]){ terrainDirty[k] = true; terrainDirtyCount++; }
+  if (terrainDirtyCount > 200) terrainFull = true;   // 大面积变化直接整张重建
+}
+/* 地形改写统一入口：改 map 的同时标记脏格，避免缓存与 map 不一致 */
+function setTile(r, c, v){
+  if (map[r] && map[r][c] === v) return;
+  map[r][c] = v;
+  markTileDirty(r, c);
+  tileDelta.push([r, c, v]);                       // 顺带记入网络增量（单人模式下到点被丢弃）
+  if (tileDelta.length > 200) snapFullNeeded = true;   // 大面积破坏 → 下一帧退回全量地图
+}
+/* 把一格地形画进当前 ctx（刷新缓存时 ctx 已切到离屏） */
+function paintTerrainCell(r, c){
+  const v = map[r][c], x = c*TILE, y = r*TILE;
+  if (v === BRICK) drawBrick(x, y);
+  else if (v === STEEL) drawSteel(x, y);
+  else if (v === DESERT) drawDesert(x, y);
+  else if (v === SWAMP) drawSwamp(x, y);
+  else if (v === SNOW) drawSnow(x, y);
+  else if (v === BASE && r === 24 && c === 12) drawEagle(x, y);
+}
+function flushTerrain(){
+  if (!terrainCtx) return;
+  if (!terrainFull && !terrainDirtyCount) return;   // 无变化：本帧零成本
+  const swap = ctx; ctx = terrainCtx;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (terrainFull){
+    ctx.clearRect(0, 0, PLAY_W, PLAY_H);
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
+      if (isTerrainCacheable(map[r][c])) paintTerrainCell(r, c);
+    }
+    terrainFull = false;
+  } else {
+    const keys = [];
+    for (const k in terrainDirty) keys.push(k);
+    for (const key of keys){
+      const p = key.split(','), r = +p[0], c = +p[1];
+      // 外扩一圈：老鹰占 2x2、相邻格描边可能压到本格
+      ctx.clearRect((c-1)*TILE, (r-1)*TILE, TILE*3, TILE*3);
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++){
+        const rr = r + dr, cc = c + dc;
+        if (rr < 0 || cc < 0 || rr >= ROWS || cc >= COLS) continue;
+        if (isTerrainCacheable(map[rr][cc])) paintTerrainCell(rr, cc);
+      }
+    }
+  }
+  terrainDirty = Object.create(null);
+  terrainDirtyCount = 0;
+  ctx = swap;
+}
 
 /* 高分屏适配：按 devicePixelRatio 放大画布背板，绘制时缩放坐标系，
  * 逻辑坐标仍是 680x520（所有绘制代码无需改动），手机高分屏不再发虚。 */
@@ -108,6 +217,7 @@ function setupHiDPI(){
   DPR = dpr;
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
+  initTerrain();   // DPR 变化后地形缓存需按新分辨率重建
 }
 setupHiDPI();
 if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', setupHiDPI);
@@ -240,7 +350,7 @@ function playSnd(key){
       src.buffer = buf;
       const g = actx.createGain();
       g.gain.value = SND_VOL;
-      src.connect(g); g.connect(actx.destination);
+      src.connect(g); g.connect(sfxOut());
       src.start();
       return true;
     } catch(e) {}
@@ -277,21 +387,33 @@ function clearRect(m, r1, c1, r2, c2){
   fillRect(m, r1, c1, r2, c2, EMPTY);
 }
 
+/* ---- 关卡主题：决定地貌配比，5 个档位对应 5 种地图观感/战术 ----
+ * 草原（均衡）· 沙漠（开阔少掩体）· 雪原（减速）· 沼泽（泥泞 + 多水）· 钢铁（钢墙密集） */
+const THEMES = [
+  { name:'草原', terrain:[DESERT, SWAMP, SNOW], terr:[3,5], brick:[16,22], steel:[3,5], water:[2,3], tree:[4,6] },
+  { name:'沙漠', terrain:[DESERT],              terr:[4,6], brick:[14,20], steel:[3,5], water:[1,2], tree:[2,3] },
+  { name:'雪原', terrain:[SNOW],                terr:[4,6], brick:[16,22], steel:[3,5], water:[2,4], tree:[3,5] },
+  { name:'沼泽', terrain:[SWAMP],               terr:[4,7], brick:[16,22], steel:[2,4], water:[4,6], tree:[4,6] },
+  { name:'钢铁', terrain:[DESERT, SNOW],        terr:[3,5], brick:[18,24], steel:[6,9], water:[2,3], tree:[3,5] },
+];
+function themeForLevel(lv){ return THEMES[(Math.floor((lv - 1) / TIER_SPAN)) % THEMES.length]; }
+
 /* 生成一次随机地图（不做校验） */
-function randomMapAttempt(){
+function randomMapAttempt(theme){
+  const T = theme || THEMES[0];
   const m = blankMap();
 
-  /* 1. 地形块：沙漠 / 沼泽 / 雪地 */
-  const terrCount = rndi(3, 5);
+  /* 1. 地形块：由主题决定地貌类型与数量 */
+  const terrCount = rndi(T.terr[0], T.terr[1]);
   for (let i = 0; i < terrCount; i++){
-    const t = pick([DESERT, SWAMP, SNOW]);
+    const t = pick(T.terrain);
     const h = rndi(2, 4), w = rndi(4, 9);
     const r = rndi(1, ROWS - 2 - h), c = rndi(0, COLS - 1 - w);
     fillRect(m, r, c, r + h - 1, c + w - 1, t);
   }
 
   /* 2. 砖墙簇 */
-  const brickClusters = rndi(16, 22);
+  const brickClusters = rndi(T.brick[0], T.brick[1]);
   for (let i = 0; i < brickClusters; i++){
     const shape = pick(['h','v','box','dot']);
     const r = rndi(2, ROWS - 3), c = rndi(0, COLS - 1);
@@ -302,21 +424,21 @@ function randomMapAttempt(){
   }
 
   /* 3. 钢墙簇（少量，避免封死） */
-  const steelClusters = rndi(3, 5);
+  const steelClusters = rndi(T.steel[0], T.steel[1]);
   for (let i = 0; i < steelClusters; i++){
     const r = rndi(3, ROWS - 4), c = rndi(1, COLS - 3);
     fillRect(m, r, c, r + rndi(0, 1), c + rndi(1, 3), STEEL);
   }
 
   /* 4. 水塘 */
-  const ponds = rndi(2, 3);
+  const ponds = rndi(T.water[0], T.water[1]);
   for (let i = 0; i < ponds; i++){
     const r = rndi(3, ROWS - 6), c = rndi(1, COLS - 6);
     fillRect(m, r, c, r + rndi(0, 1), c + rndi(2, 5), WATER);
   }
 
   /* 5. 树林 */
-  const groves = rndi(3, 5);
+  const groves = rndi(T.tree[0], T.tree[1]);
   for (let i = 0; i < groves; i++){
     const r = rndi(2, ROWS - 3), c = rndi(0, COLS - 4);
     fillRect(m, r, c, r + rndi(0, 2), c + rndi(1, 4), TREE);
@@ -366,9 +488,12 @@ function isMapPlayable(m){
   }
   return ok;
 }
+let levelThemeName = '';
 function buildMap(){
+  const theme = themeForLevel(level);
+  levelThemeName = theme.name;
   for (let i = 0; i < 60; i++){
-    const m = randomMapAttempt();
+    const m = randomMapAttempt(theme);
     if (isMapPlayable(m)) return m;
   }
   // 保底：极简可用布局
@@ -389,10 +514,115 @@ function tileSpeedMul(t){
 
 /* ================= 音频 ================= */
 let actx = null;
+
+/* ---- 音量总线：源 → 音效/音乐总线 → 主总线 → destination ----
+ * 原先每个音源都直连 destination，只能整体静音、且设置不持久化。
+ * 现在三级可分别调节并写入 localStorage。 */
+const VOL = { master: 0.8, sfx: 0.9, music: 0.45 };
+let masterGain = null, sfxGain = null, musicGain = null;
+try {
+  const sv = JSON.parse(localStorage.getItem('tank1998_vol') || '{}');
+  for (const k in VOL) if (typeof sv[k] === 'number') VOL[k] = Math.max(0, Math.min(1, sv[k]));
+} catch(e) {}
+function saveVolumes(){ try { localStorage.setItem('tank1998_vol', JSON.stringify(VOL)); } catch(e) {} }
+function audioBusInit(){
+  if (!actx || masterGain) return;
+  try {
+    masterGain = actx.createGain();
+    sfxGain    = actx.createGain();
+    musicGain  = actx.createGain();
+    sfxGain.connect(masterGain);
+    musicGain.connect(masterGain);
+    masterGain.connect(actx.destination);
+    applyVolumes();
+  } catch(e) { masterGain = sfxGain = musicGain = null; }
+}
+function applyVolumes(){
+  if (masterGain) masterGain.gain.value = muted ? 0 : VOL.master;
+  if (sfxGain)    sfxGain.gain.value    = VOL.sfx;
+  if (musicGain)  musicGain.gain.value  = VOL.music;
+}
+function sfxOut(){ return sfxGain || (actx && actx.destination); }
+
+/* ---- 背景音乐：程序化 chiptune（无外部素材，随游戏状态切换） ----
+ * 以八分音符为一格；'.' 为延音、'-' 为休止。用「提前排程」而不是到点才发声，节奏更稳。 */
+const NOTE = { A2:110.00, C3:130.81, D3:146.83, E3:164.81, F3:174.61, G3:196.00, A3:220.00, B3:246.94,
+               C4:261.63, D4:293.66, E4:329.63, F4:349.23, G4:392.00, A4:440.00, B4:493.88,
+               C5:523.25, D5:587.33, E5:659.25, G5:783.99, A5:880.00 };
+const BGM = {
+  title: { bpm: 92,
+    lead: 'A4 . . . G4 . E4 . D4 . . . E4 . . . A4 . . . G4 . E4 . C4 . D4 . . . . . . .',
+    bass: 'A2 . . . . . . . E3 . . . . . . . F3 . . . . . . . G3 . . . . . . .' },
+  battle: { bpm: 138,
+    lead: 'A4 . C5 . E5 . C5 . D5 . . . C5 . A4 . G4 . A4 . C5 . A4 . E4 . . . . . . .',
+    bass: 'A2 . A2 . E3 . E3 . F3 . F3 . G3 . G3 . A2 . A2 . E3 . E3 . F3 . G3 .' },
+};
+let bgmOn = true;
+try { bgmOn = localStorage.getItem('tank1998_bgm') !== '0'; } catch(e) {}
+let bgmName = null, bgmStep = 0, bgmNextT = 0, bgmTimer = null;
+function playNote(name, t, dur, type, vol){
+  const f = NOTE[name];
+  if (!f || !actx) return;
+  try {
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(musicGain || actx.destination);
+    o.start(t); o.stop(t + dur + 0.03);
+  } catch(e) {}
+}
+/* 每 120ms 向前排 0.45 秒的谱，避免用 setTimeout 直接发声导致节奏抖动 */
+function bgmSchedule(){
+  if (!actx || !bgmName) return;
+  const tr = BGM[bgmName];
+  const step = 60 / tr.bpm / 2;
+  const lead = tr.lead.split(' '), bass = tr.bass.split(' ');
+  let guard = 0;
+  while (bgmNextT < actx.currentTime + 0.45 && guard++ < 64){
+    const li = bgmStep % lead.length, bi = bgmStep % bass.length;
+    playNote(lead[li], bgmNextT, step * 0.88, 'square',   0.13);
+    playNote(bass[bi], bgmNextT, step * 0.94, 'triangle', 0.20);
+    bgmNextT += step;
+    bgmStep++;
+  }
+}
+function bgmStart(name){
+  if (!actx || !BGM[name]) return;
+  bgmName = name; bgmStep = 0;
+  bgmNextT = actx.currentTime + 0.06;
+  if (!bgmTimer) bgmTimer = setInterval(bgmSchedule, 120);
+  bgmSchedule();
+}
+function bgmStop(){
+  bgmName = null;
+  if (bgmTimer){ clearInterval(bgmTimer); bgmTimer = null; }
+}
+/* 主循环每帧调用：按游戏状态切换曲目（无 AudioContext / 关掉音乐时为空操作） */
+function syncBgm(){
+  if (!actx || !bgmOn || paused || state === 'over'){ if (bgmName) bgmStop(); return; }
+  const want = state === 'title' ? 'title' : 'battle';
+  if (want !== bgmName) bgmStart(want);
+}
+function setBgmOn(on){
+  bgmOn = !!on;
+  try { localStorage.setItem('tank1998_bgm', bgmOn ? '1' : '0'); } catch(e) {}
+  if (!bgmOn) bgmStop();
+}
+function setVolume(bus, v){
+  if (!(bus in VOL)) return;
+  VOL[bus] = Math.max(0, Math.min(1, v));
+  saveVolumes();
+  applyVolumes();
+}
+
 function initAudio(){
   if (!actx){
     try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
     initAudioAssets();   // AudioContext 就绪后预取 wav 素材
+    audioBusInit();      // 建好音量总线（之后所有音源都接到总线上）
     /* iOS/Chrome 自动播放策略：手势内播一个静音 buffer 解锁输出 */
     if (actx){
       try {
@@ -404,6 +634,7 @@ function initAudio(){
   }
   /* 每次交互都尝试恢复被浏览器挂起的上下文 */
   if (actx && actx.state === 'suspended'){ try { actx.resume(); } catch(e) {} }
+  syncBgm();
 }
 function beep(freq, dur, type, vol, slideTo){
   if (!actx || muted) return;
@@ -415,7 +646,7 @@ function beep(freq, dur, type, vol, slideTo){
     if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(30, slideTo), t + dur);
     g.gain.setValueAtTime(vol || 0.12, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g); g.connect(actx.destination);
+    o.connect(g); g.connect(sfxOut());
     o.start(t); o.stop(t + dur + 0.02);
   } catch(e) {}
 }
@@ -432,7 +663,7 @@ function noise(dur, vol){
     const g = actx.createGain(); const t = actx.currentTime;
     g.gain.setValueAtTime(vol || 0.3, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(g); g.connect(actx.destination);
+    src.connect(g); g.connect(sfxOut());
     src.start(t); src.stop(t + dur);
   } catch(e) {}
 }
@@ -463,6 +694,7 @@ let levelIntro = 0;         // FC 经典幕布开场剩余时间（秒）
 const LEVEL_INTRO_TIME = 1.6;
 let startLockT = 0;         // 结束/过关后的误触保护：此时间点前忽略“开始”请求
 let paused = false, muted = false, gameTime = 0;
+try { muted = localStorage.getItem('tank1998_muted') === '1'; } catch(e) {}   // 静音设置持久化
 let keys = {};
 /* ---- 双人合作状态（netMode==='off' 时全部不生效，单人路径零影响） ---- */
 let keys2 = {};             // 玩家2 的输入：房主侧由客方上报写入，驱动 player2
@@ -502,7 +734,7 @@ function setReduceMotion(on){
   syncReduceMotionBtn();
 }
 
-function enemySpeedMul(){ return Math.min(1.6, 1 + (level - 1) * 0.08); }
+function enemySpeedMul(){ return tier().speed; }   // 档位速度（原为线性 1+0.08*(level-1) 且在 1.6 封顶）
 
 /* ================= 实体 ================= */
 let __tankId = 1;
@@ -511,8 +743,8 @@ function makeTank(x, y, dir, kind, opts){
   const isP = kind === 'player';
   const def = isP ? {speed:2.6, hp:playerMaxHp(), fire:0.4} : ETYPES[kind];
   const spd = def.speed * (isP ? 1 : enemySpeedMul());
-  // 关卡缩放：每 3 关 +1 血，封顶 +2（后期压力来自数量与类型组合，而非血量膨胀）
-  const hpBonus = (!isP && kind !== 'bonus') ? Math.min(2, Math.floor((level - 1) / 3)) : 0;
+  // 档位加血：每档整体 +0/+1/+2（红色道具敌人与首领不吃这档加成）
+  const hpBonus = (!isP && kind !== 'bonus' && kind !== 'boss') ? tier().hp : 0;
   const hp = def.hp + hpBonus;
   return {
     id: __tankId++,
@@ -735,7 +967,7 @@ function pickDirByField(e, field){
   if (!opts.length) return null;
   if (!field) return pick(opts).d;
   opts.sort((a, b) => a.v - b.v);
-  const smart = Math.min(0.92, 0.62 + level * 0.03);
+  const smart = tier().smart;   // 档位 AI 命中率（原为 0.62+0.03*level 且在 0.92 封顶）
   let idx = (Math.random() < smart || opts.length === 1) ? 0 : 1;
   // 尽量避免原地掉头
   if (opts[idx].d === (e.dir + 2) % 4 && opts.length > 1) idx = idx === 0 ? 1 : 0;
@@ -933,7 +1165,7 @@ function stepBullet(b, dist){
   const tile = map[cy][cx];
   const power = b.power || 1;
   if (tile === BRICK){
-    map[cy][cx] = EMPTY;
+    setTile(cy, cx, EMPTY);
     addExplosion(cx*TILE+TILE/2, cy*TILE+TILE/2, 'spark');
     sfx.brick();
     // 穿甲钻 / 激光：钻透砖墙继续前进（有格数上限）
@@ -943,7 +1175,7 @@ function stepBullet(b, dist){
   }
   if (tile === STEEL){
     if (power >= 2){                             // 2 级穿甲弹打穿钢板
-      map[cy][cx] = EMPTY;
+      setTile(cy, cx, EMPTY);
       addExplosion(cx*TILE+TILE/2, cy*TILE+TILE/2, 'spark');
       sfx.steel();
     } else {
@@ -955,7 +1187,7 @@ function stepBullet(b, dist){
   }
   if (tile === WATER){
     if (power >= 3){                             // 3 级毁灭弹蒸发水面
-      map[cy][cx] = EMPTY;
+      setTile(cy, cx, EMPTY);
       b.dead = true;
       addExplosion(cx*TILE+TILE/2, cy*TILE+TILE/2, 'spark');
       sfx.brick();
@@ -1123,6 +1355,10 @@ function damageTank(t, n, src){
       score += t.score;
       killCount++;
       if (t.kind === 'bonus') spawnItem(t.x, t.y, true);          // 红色敌人必掉
+      else if (t.kind === 'boss'){                                 // 首领：必掉双道具（force 可越过同屏上限）
+        spawnItem(t.x, t.y, true);
+        spawnItem(t.x, t.y, true);
+      }
       else if (Math.random() < ITEM_DROP_RATE || killCount % KILL_BONUS_EVERY === 0) spawnItem(t.x, t.y);
       if (src === 'burn' && (t.burnGen || 0) < BURN_GEN) spreadBurn(t);   // 燃烧致死 → 传染
     }
@@ -1179,7 +1415,7 @@ function tickStatus(t, dt){
 function destroyBase(){
   if (!baseAlive) return;
   baseAlive = false;
-  map[24][12] = EMPTY; map[24][13] = EMPTY; map[25][12] = EMPTY; map[25][13] = EMPTY;
+  setTile(24, 12, EMPTY); setTile(24, 13, EMPTY); setTile(25, 12, EMPTY); setTile(25, 13, EMPTY);
   addExplosion(12*TILE+TILE, 24*TILE+TILE, 'big');
   addExplosion(12*TILE+TILE, 24*TILE+TILE, 'big');
   sfx.playerBoom();
@@ -1375,20 +1611,29 @@ function spawnEnemy(){
 
 /* ================= 关卡 ================= */
 function buildQueue(){
+  const T = tier();
   const q = [];
-  const poolBase = ['basic','basic','fast','basic','power','fast','basic','armor','power','basic'];
-  const total = 20;
-  for (let i = 0; i < total; i++) q.push(pick(poolBase));
+  const total = T.total + (isBossLevel() ? -2 : 0);   // BOSS 关总量略减，抵消首领带来的额外压力
+  for (let i = 0; i < total; i++) q.push(pick(T.pool));
   const bonusCount = 4 + Math.min(3, Math.floor(level / 2));   // 红色道具敌人数量
   for (let i = 0; i < bonusCount; i++){
     const pos = 1 + ((Math.random() * (q.length - 1)) | 0);
     q.splice(pos, 0, 'bonus');
   }
+  if (isEliteLevel()){                       // 精英关：前段插入精英，开场即高压
+    for (let i = 0; i < ELITE_COUNT; i++) q.splice(2 + i, 0, pick(ELITE_TYPES));
+    q.splice(0, 0, 'bonus');                 // 顺带保底一个道具敌人，避免精英关太苦
+  }
+  if (isBossLevel()) q.push('boss');         // BOSS 关：首领压轴
   return q;
 }
 
-function startLevel(){
+/* fresh=true 表示「重开一局」：火力等级回到 1 级；
+ * 不传 / false 表示「进入下一关」：继承上一关的火力等级（丢命复活同理，见 updatePlayer）。 */
+function startLevel(fresh){
   map = buildMap();
+  terrainFull = true;   // 换图：地形缓存整张重建
+  snapFullNeeded = true; tileDelta = [];   // 换图：网络那边也要重发一次全量地图
   enemies = []; bullets = []; items = []; explosions = []; grenadeBlasts = [];
   enemyQueue = buildQueue();
   spawnTimer = 1.0;
@@ -1397,11 +1642,11 @@ function startLevel(){
   playerEagle = 0;
   levelIntro = LEVEL_INTRO_TIME;   // 幕布开场
   baseAlive = true;
-  const carryPower = (player && !player.dead) ? (player.power || 1) : 1;   // 继承上关火力等级；新游戏/已阵亡则重置为 1
+  const carryPower = (!fresh && player && !player.dead) ? (player.power || 1) : 1;   // 下一关继承；重开一局则重置为 1
   player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln: 2, power: carryPower});
   addSpawnFx(player.px, player.py);
   if (netMode === 'host'){   // 双人房主：同步生成玩家2（客方仅靠快照渲染）
-    const carryPower2 = (player2 && !player2.dead) ? (player2.power || 1) : 1;
+    const carryPower2 = (!fresh && player2 && !player2.dead) ? (player2.power || 1) : 1;
     player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', {invuln: 2, power: carryPower2});
     addSpawnFx(player2.px, player2.py);
   }
@@ -1411,7 +1656,7 @@ function startLevel(){
 
 function startGame(){
   score = 0; lives = 3; level = 1; lives2 = 3;
-  startLevel();
+  startLevel(true);   // 重开一局：火力等级归 1
 }
 
 function nextLevel(){
@@ -1642,8 +1887,8 @@ function hitFlashRect(cx, cy, left){
  * maxHp>=4 时按血格分段，与 1 点伤害的离散模型吻合。 */
 function drawHealthBar(t, cx, cy){
   if (t.maxHp <= 1) return;
-  if (t.hp >= t.maxHp && t.kind !== 'armor') return;
-  const w = 16, h = 2, x = cx - w/2, y = cy - 21;
+  if (t.hp >= t.maxHp && t.kind !== 'armor' && t.kind !== 'boss') return;   // 首领血条常显
+  const w = t.kind === 'boss' ? 32 : 16, h = 2, x = cx - w/2, y = cy - 21;
   px(x - 1, y - 1, w + 2, h + 2, '#0B0D10');
   px(x, y, w, h, '#14171B');
   const ratio = Math.max(0, t.hp / t.maxHp);
@@ -1778,6 +2023,19 @@ function drawTank(t){
     ctx.fillText('★', cx, cy - 30);
     ctx.textAlign = 'left';
   }
+  // BOSS 标记：紫色王冠 + 文字，与普通敌人一眼区分（形状冗余，不依赖颜色也能认）
+  if (t.kind === 'boss'){
+    ctx.fillStyle = '#B14BFF';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('BOSS', cx, cy - 33);
+    ctx.textAlign = 'left';
+    px(cx - 9, cy - 31, 4, 3, '#B14BFF');
+    px(cx - 2, cy - 31, 4, 3, '#B14BFF');
+    px(cx + 5, cy - 31, 4, 3, '#B14BFF');
+    px(cx - 9, cy - 33, 6, 2, '#D9A9FF');
+    px(cx + 3, cy - 33, 6, 2, '#D9A9FF');
+  }
   // 水陆两栖标注
   if (t.amphibious > 0){
     px(cx - 6, cy + 10, 12, 2, '#7FD0FF');
@@ -1804,6 +2062,19 @@ function drawItem(it){
   if (expiring && reduceMotion){          // 临期静态提示（替代闪烁）
     ctx.strokeStyle = '#FF3B30'; ctx.lineWidth = 1;
     ctx.strokeRect(x - 1.5, y - 1.5, TILE + 3, TILE + 3);
+  }
+  /* 武器道具：直接用字母标识（F/C/L/S/H/T/D），比 20x20 的矢量小图标更易辨认 */
+  const wLetter = WEAPON_LETTER[it.type];
+  if (wLetter){
+    ctx.save();
+    px(x+1, y+1, TILE-2, TILE-2, ring);            // 主题色外框
+    px(x+3, y+3, TILE-6, TILE-6, '#14171B');       // 深色内芯
+    ctx.fillStyle = ring;
+    ctx.font = 'bold 14px "Arial Black","Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(wLetter, cx, cy + 1);
+    ctx.restore();
+    return;
   }
   // 像素贴图（素材自带主题色边框 + 图标，缩放铺满一个格子）；eagle 无素材走下方矢量绘制
   const irec = IMG['item_' + it.type];
@@ -1961,15 +2232,10 @@ function drawExplosion(ex){
 function render(){
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // 高分屏：统一缩放坐标系
   px(0, 0, PLAY_W, PLAY_H, '#000');
+  flushTerrain();                                          // 地形缓存：无变化时零开销
+  if (terrainCanvas) ctx.drawImage(terrainCanvas, 0, 0, PLAY_W, PLAY_H);
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
-    const v = map[r][c], x = c*TILE, y = r*TILE;
-    if (v === BRICK) drawBrick(x, y);
-    else if (v === STEEL) drawSteel(x, y);
-    else if (v === WATER) drawWater(x, y);
-    else if (v === DESERT) drawDesert(x, y);
-    else if (v === SWAMP) drawSwamp(x, y);
-    else if (v === SNOW) drawSnow(x, y);
-    else if (v === BASE){ if (r === 24 && c === 12) drawEagle(x, y); }
+    if (map[r][c] === WATER) drawWater(c*TILE, r*TILE);     // 水有波纹动画，不进缓存
   }
   for (const it of items) drawItem(it);
   if (player) drawTank(player);
@@ -2024,6 +2290,11 @@ function drawCoopHud(){
   ctx.fillText('P2', 10, 40);
   for (let i = 0; i < Math.max(0, lives2); i++){ px(34 + i*15, 29, 11, 11, '#7FD0FF'); px(34+i*15, 33, 3, 6, '#2F6F7E'); }
   if (coopDropped){ ctx.fillStyle = '#FF6B6B'; ctx.font = 'bold 12px sans-serif'; ctx.fillText('（' + (netMode === 'host' ? '玩家2' : '房主') + '掉线，重连中…）', 10, 58); }
+  else if (netMode === 'host' && coopRtt > 0){
+    ctx.fillStyle = coopRtt > 150 ? '#FF8A6B' : '#98A2AD';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('延迟 ' + coopRtt + 'ms', 10, 58);
+  }
   ctx.restore();
   // 玩家2 头顶标记，便于区分
   if (player2 && !player2.dead){
@@ -2075,6 +2346,10 @@ function drawPanel(){
   ctx.fillText('关卡 LEVEL', x0+14, 274);
   ctx.fillStyle = '#7FD0FF'; ctx.font = 'bold 20px sans-serif';
   ctx.fillText(String(level).padStart(2,'0'), x0+14, 296);
+  // 档位标签：新兵/老兵/精锐/王牌/噩梦，且标注精英关与 BOSS 关
+  ctx.fillStyle = isBossLevel() ? '#B14BFF' : (isEliteLevel() ? '#FF8A6B' : '#A9B4C0');
+  ctx.font = 'bold 11px "Microsoft YaHei",sans-serif';
+  ctx.fillText(levelTag(), x0+44, 296);
 
   ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
   ctx.fillText('火力 FIRE', x0+14, 320);
@@ -2094,11 +2369,15 @@ function drawPanel(){
   ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
   ctx.fillText('武器 WEAPON', x0+14, 398);
   if (wpn !== 'normal'){
-    px(x0+14, 404, 11, 11, wg.color);
+    px(x0+14, 404, 12, 12, wg.color);
+    ctx.fillStyle = '#14171B'; ctx.font = 'bold 10px "Arial Black",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(WEAPON_LETTER[wpn] || '?', x0+20, 413);
+    ctx.textAlign = 'left';
     ctx.fillStyle = wg.color; ctx.font = 'bold 12px sans-serif';
-    ctx.fillText(wg.name, x0+29, 414);
+    ctx.fillText(wg.name, x0+31, 414);
     ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 12px sans-serif';
-    ctx.fillText('×' + player.ammo, x0+92, 414);
+    ctx.fillText('×' + player.ammo, x0+96, 414);
   } else {
     ctx.fillStyle = '#7E8792'; ctx.font = '12px sans-serif';
     ctx.fillText('— 普通弹', x0+14, 414);
@@ -2153,6 +2432,7 @@ const hudLives2 = document.getElementById('hud-lives2');
 const hudLevel  = document.getElementById('hud-level');
 const hudPower  = document.getElementById('hud-power');
 const hudEnemy  = document.getElementById('hud-enemy');
+const hudWeapon = document.getElementById('hud-weapon');
 const _hudCache = Object.create(null);
 function hearts(n){                       // 避免依赖 String.prototype.repeat
   let s = ''; for (let i = 0; i < n; i++) s += '♥'; return s || '—';
@@ -2169,8 +2449,10 @@ function syncHud(){
   setHud(hudScore,  String(score).padStart(6, '0'));
   setHud(hudLives,  lives  > 0 ? hearts(lives)  : '—');
   setHud(hudLives2, lives2 > 0 ? hearts(lives2) : '—');
-  setHud(hudLevel,  String(level).padStart(2, '0'));
+  setHud(hudLevel,  String(level).padStart(2, '0') + (isBossLevel() ? '·BOSS' : (isEliteLevel() ? '·精英' : '')));
   setHud(hudPower,  'Lv' + ((player && player.power) || 1));
+  const hw = (player && player.gun) || 'normal';
+  setHud(hudWeapon, hw === 'normal' ? '—' : ((WEAPON_LETTER[hw] || '?') + ' ' + (GUNS[hw] || {}).name + ' ×' + player.ammo));
   setHud(hudEnemy,  String(remain).padStart(2, '0'));
   hudEl.classList.toggle('coop', netMode !== 'off' || !!player2);
 }
@@ -2178,10 +2460,14 @@ function syncHud(){
 function overlayText(lines, big){
   px(0, 0, PLAY_W, PLAY_H, 'rgba(0,0,0,0.72)');
   ctx.textAlign = 'center';
-  lines.forEach((ln, i) => {
+  /* 逐行累加 y：gap 表示「本行到下一行」的间距。
+   * 旧写法 190 + i*gap 会让 gap 较小的后一行反向上移，出现行与行重叠（GAME OVER 的得分被提示覆盖）。 */
+  let y = 190;
+  lines.forEach(ln => {
     ctx.fillStyle = ln.color || '#FFFFFF';
     ctx.font = ln.size || '26px "Microsoft YaHei",sans-serif';
-    ctx.fillText(ln.text, PLAY_W/2, 190 + i * (ln.gap || 46));
+    ctx.fillText(ln.text, PLAY_W/2, y);
+    y += (ln.gap || 46);
   });
   ctx.textAlign = 'left';
 }
@@ -2191,6 +2477,7 @@ function drawTitle(){
     { text:'TANK 1998 · 增强版', size:'18px sans-serif', color:'#A9B4C0', gap:30 },
     { text:'保卫基地，消灭所有敌军', size:'16px sans-serif', color:'#C9D1D9', gap:40 },
     { text:'红色闪烁敌人击杀必掉道具', size:'15px sans-serif', color:'#FF6B6B', gap:26 },
+    { text:'武器字母：F火焰 C冷冻 L激光 S散弹 H追踪 T电磁 D穿甲钻', size:'13px sans-serif', color:'#A9B4C0', gap:38 },
     { text:'点按屏幕 或 按 Enter 开始游戏', size:'20px sans-serif', color:'#7FD0FF', gap:40 },
     { text:'方向键/摇杆移动 · 空格/开火键射击', size:'13px sans-serif', color:'#98A2AD', gap:26 },
     { text:'H 键切换血量档位：' + PLAYER_HP_MODES.map((m, i) =>
@@ -2252,64 +2539,120 @@ function drawCurtain(){
     px(0, PLAY_H - hh, PLAY_W, 3, '#3A3F45');
   }
   if (cover > 0.9){
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 32px "Microsoft YaHei",sans-serif';
+    const boss = isBossLevel();
     ctx.textAlign = 'center';
-    ctx.fillText('STAGE ' + level, PLAY_W/2, PLAY_H/2 - 6);
+    ctx.fillStyle = boss ? '#D9A9FF' : '#FFFFFF';
+    ctx.font = 'bold 32px "Microsoft YaHei",sans-serif';
+    ctx.fillText('STAGE ' + level, PLAY_W/2, PLAY_H/2 - 16);
+    ctx.fillStyle = boss ? '#B14BFF' : '#F0C040';
+    ctx.font = 'bold 16px "Microsoft YaHei",sans-serif';
+    ctx.fillText(levelTag() + ' · 地貌 ' + levelThemeName, PLAY_W/2, PLAY_H/2 + 12);
     ctx.fillStyle = '#D9DDE3';
     ctx.font = '14px sans-serif';
-    ctx.fillText('敌军 × ' + (enemyQueue.length + enemies.filter(e => !e.dead).length) + ' · 保卫基地', PLAY_W/2, PLAY_H/2 + 24);
+    ctx.fillText('敌军 × ' + (enemyQueue.length + enemies.filter(e => !e.dead).length) + ' · 保卫基地', PLAY_W/2, PLAY_H/2 + 36);
     ctx.textAlign = 'left';
   }
 }
 
-/* ================= 双人合作：网络同步 ================= */
-/* 快照：房主把整局状态序列化发给客方，客方仅渲染、不模拟 */
-function tankSnap(t){
+/* ================= 双人合作：网络同步 =================
+ * 快照瘦身（v1.2）：旧格式每 tick 都把整张地图 + 每个实体的完整字段名发一遍，
+ * 20Hz 下约 8~15KB/s。新格式做了三件事：
+ *   1) 地图改增量：首帧给全量，之后只发变化的格子（打砖 / 蒸水 / 基地被毁）
+ *   2) 实体用「定长数组」代替对象，省掉每个实体重复的 key 名
+ *   3) 附 seq 序号，客方在输入包里回带 ack，房主据此算出 RTT（用于显示延迟）
+ * 收发两侧必须同步修改，数组下标即协议。 */
+const TANK_F = ['id','x','y','px','py','dir','kind','hp','maxHp','fire','speed','power',
+                'invuln','dead','deadTimer','score','isPlayer','ammo','gun','role',
+                'pendingDir','movingTo','movingToY','amphibious','burnT','slowT','overheatT','hitFlash','bulletCd'];
+function tankArr(t){                       // 下标见 TANK_F
   if (!t) return null;
-  return {
-    id:t.id, x:t.x, y:t.y, px:t.px, py:t.py, dir:t.dir, kind:t.kind,
-    hp:t.hp, maxHp:t.maxHp, fire:t.fire, speed:t.speed,
-    movingTo: t.movingTo ? {x:t.movingTo.x, y:t.movingTo.y} : null,
-    pendingDir:t.pendingDir,
-    invuln:t.invuln, dead:t.dead, deadTimer:t.deadTimer,
-    score:t.score, isPlayer:t.isPlayer,
-    power:t.power, bulletCd:t.bulletCd, amphibious:t.amphibious,
-    gun:t.gun, ammo:t.ammo, burnT:t.burnT, slowT:t.slowT, overheatT:t.overheatT,
-    hitFlash:t.hitFlash, role:t.role,
-  };
+  return [
+    t.id, t.x, t.y, t.px, t.py, t.dir, t.kind, t.hp, t.maxHp, t.fire, t.speed, t.power,
+    t.invuln, t.dead ? 1 : 0, t.deadTimer, t.score, t.isPlayer ? 1 : 0, t.ammo, t.gun, t.role,
+    t.pendingDir === undefined ? -2 : t.pendingDir,
+    t.movingTo ? t.movingTo.x : -1, t.movingTo ? t.movingTo.y : -1,
+    t.amphibious, t.burnT, t.slowT, t.overheatT, t.hitFlash, t.bulletCd,
+  ];
 }
-function bulletSnap(b){
-  return { px:b.px, py:b.py, x:b.x, y:b.y, dir:b.dir, ang:b.ang,
-           power:b.power||1, gun:b.gun||'normal', isPlayer: !!(b.owner&&b.owner.isPlayer), kind:b.kind };
+function arrTank(a){
+  const t = {};
+  for (let i = 0; i < TANK_F.length; i++) t[TANK_F[i]] = a[i];
+  t.dead = !!t.dead;
+  t.isPlayer = !!t.isPlayer;
+  if (t.pendingDir === -2) t.pendingDir = null;
+  t.movingTo = (t.movingTo >= 0 && t.movingToY >= 0) ? { x: t.movingTo, y: t.movingToY } : null;
+  delete t.movingToY;
+  return t;
+}
+function bulletArr(b){
+  return [b.px, b.py, b.x, b.y, b.dir, b.ang, b.power || 1, b.gun || 'normal',
+          (b.owner && b.owner.isPlayer) ? 1 : 0, b.kind];
+}
+function arrBullet(a){
+  return { px:a[0], py:a[1], x:a[2], y:a[3], dir:a[4], ang:a[5], power:a[6], gun:a[7],
+           owner:{ isPlayer: a[8] === 1 }, kind:a[9] };
+}
+/* 地图增量：setTile 写入，由 serializeSnapshot 取走；超过阈值就退回全量 */
+let snapSeq = 0, coopRtt = 0, lastSnapT = 0;
+/* 最近若干次快照的发送时刻（环形缓冲）：客方 ack 到达时往往已经发过更新的帧，
+ * 所以不能只比对「最近一帧」，要在窗口内反查该 seq 的发送时间。 */
+let snapPing = [];
+const SNAP_PING_KEEP = 16;
+function takeTileDelta(){
+  const d = tileDelta;
+  tileDelta = [];
+  return d;
 }
 function serializeSnapshot(){
-  return {
+  const snap = {
+    seq: ++snapSeq,
     s: state, lvl: level, score: score, lives: lives, lives2: lives2,
-    fe: freezeEnemies, fp: freezePlayer, pe: playerEagle, li: levelIntro, base: baseAlive,
-    map: map.map(r => r.slice()),
-    p: tankSnap(player),
-    p2: tankSnap(player2),
-    e: enemies.filter(en => !en.dead).map(tankSnap),
-    b: bullets.map(bulletSnap),
-    it: items.filter(i => !i.dead).map(i => ({x:i.x, y:i.y, px:i.px, py:i.py, type:i.type, t:i.t})),
-    ex: explosions.map(x => ({px:x.px, py:x.py, t:x.t, dur:x.dur, kind:x.kind})),
-    gb: grenadeBlasts.map(g => ({px:g.px, py:g.py, t:g.t, r:g.r})),
+    fe: freezeEnemies, fp: freezePlayer, pe: playerEagle, li: levelIntro, base: baseAlive ? 1 : 0,
+    p: tankArr(player),
+    p2: tankArr(player2),
+    e: enemies.filter(en => !en.dead).map(tankArr),
+    b: bullets.map(bulletArr),
+    it: items.filter(i => !i.dead).map(i => [i.x, i.y, i.px, i.py, i.type, i.t]),
+    ex: explosions.map(x => [x.px, x.py, x.t, x.dur, x.kind]),
+    gb: grenadeBlasts.map(g => [g.px, g.py, g.t, g.r]),
   };
+  if (snapFullNeeded){
+    snap.m = map.map(r => r.slice());     // 首帧（或换图/大面积破坏后）全量地图
+    tileDelta = [];
+    snapFullNeeded = false;
+  } else {
+    snap.md = takeTileDelta();            // 之后只发变化的格子
+  }
+  lastSnapT = performance.now();
+  snapPing.push([snap.seq, lastSnapT]);
+  while (snapPing.length > SNAP_PING_KEEP) snapPing.shift();
+  return snap;
 }
 function applySnapshot(s){
   if (!s) return;
   state = s.s; level = s.lvl; score = s.score; lives = s.lives; lives2 = s.lives2;
-  freezeEnemies = s.fe; freezePlayer = s.fp; playerEagle = s.pe; levelIntro = s.li; baseAlive = s.base;
-  map = s.map.map(r => r.slice());
-  player = Object.assign({}, s.p);
-  player2 = s.p2 ? Object.assign({}, s.p2) : null;
-  enemies = s.e.map(t => Object.assign({}, t));
-  bullets = s.b.map(b => ({ px:b.px, py:b.py, x:b.x, y:b.y, dir:b.dir, ang:b.ang, power:b.power, gun:b.gun, owner:{isPlayer:b.isPlayer}, kind:b.kind }));
-  items = s.it.map(i => ({ x:i.x, y:i.y, px:i.px, py:i.py, type:i.type, t:i.t, dead:false }));
-  explosions = s.ex.map(x => ({ px:x.px, py:x.py, t:x.t, dur:x.dur, kind:x.kind }));
-  grenadeBlasts = (s.gb || []).map(g => ({ px:g.px, py:g.py, t:g.t, r:g.r }));
+  freezeEnemies = s.fe; freezePlayer = s.fp; playerEagle = s.pe; levelIntro = s.li;
+  baseAlive = (s.base === 1 || s.base === true);
+  if (s.m){                               // 全量地图
+    map = s.m.map(r => r.slice());
+    terrainFull = true;
+  }
+  if (s.md){                              // 增量：只改变化的格子，并标记脏区
+    for (const d of s.md){
+      if (map[d[0]]) { map[d[0]][d[1]] = d[2]; markTileDirty(d[0], d[1]); }
+    }
+  }
+  player = arrTank(s.p);
+  player2 = s.p2 ? arrTank(s.p2) : null;
+  enemies = s.e.map(arrTank);
+  bullets = s.b.map(arrBullet);
+  items = s.it.map(i => ({ x:i[0], y:i[1], px:i[2], py:i[3], type:i[4], t:i[5], dead:false }));
+  explosions = s.ex.map(x => ({ px:x[0], py:x[1], t:x[2], dur:x[3], kind:x[4] }));
+  grenadeBlasts = (s.gb || []).map(g => ({ px:g[0], py:g[1], t:g[2], r:g[3] }));
+  if (typeof s.seq === 'number') applySnapshot.lastSeq = s.seq;
 }
+/* 客方：把已收到的最大 seq 回带在输入包里，房主据此算 RTT */
+applySnapshot.lastSeq = 0;
 /* 输入：客方把方向/开火压成 1 字节发给房主 */
 function packInput(k){
   let b = 0;
@@ -2376,7 +2719,15 @@ function coopHandleMsg(msg){
   } else if (msg.type === 'state'){
     if (netMode === 'guest'){ applySnapshot(msg.snap); coopReady = true; coopHideOverlay(); }
   } else if (msg.type === 'input'){
-    if (netMode === 'host'){ keys2 = unpackInput(msg.k); }
+    if (netMode === 'host'){
+      keys2 = unpackInput(msg.k);
+      // 客方回带 ack：在最近 16 帧的发送时刻里反查该 seq，得到往返时延（显示在双人 HUD 上）
+      if (typeof msg.ack === 'number'){
+        for (let i = snapPing.length - 1; i >= 0; i--){
+          if (snapPing[i][0] === msg.ack){ coopRtt = Math.round(performance.now() - snapPing[i][1]); break; }
+        }
+      }
+    }
   }
 }
 
@@ -2557,7 +2908,40 @@ function toggleMute(){
   muted = !muted;
   btnMute.textContent = muted ? '🔇 静音' : '🔊 音效';
   btnMute.classList.toggle('on', muted);
+  try { localStorage.setItem('tank1998_muted', muted ? '1' : '0'); } catch(e) {}   // 静音设置持久化
+  applyVolumes();
 }
+function syncMuteBtn(){
+  if (!btnMute) return;
+  btnMute.textContent = muted ? '🔇 静音' : '🔊 音效';
+  btnMute.classList.toggle('on', muted);
+}
+
+/* ---- 设置面板：主音量 / 音效 / 音乐（分项 + 持久化） ---- */
+const setPanel   = document.getElementById('set-panel');
+const volMaster  = document.getElementById('vol-master');
+const volSfx     = document.getElementById('vol-sfx');
+const volMusic   = document.getElementById('vol-music');
+const chkBgm     = document.getElementById('chk-bgm');
+const btnSet     = document.getElementById('btn-set');
+function syncSetPanel(){
+  if (volMaster) volMaster.value = String(Math.round(VOL.master * 100));
+  if (volSfx)    volSfx.value    = String(Math.round(VOL.sfx * 100));
+  if (volMusic)  volMusic.value  = String(Math.round(VOL.music * 100));
+  if (chkBgm)    chkBgm.checked  = bgmOn;
+}
+function toggleSetPanel(){
+  if (!setPanel) return;
+  const show = !(setPanel.classList.contains('show'));
+  setPanel.classList.toggle('show', show);
+  if (btnSet) btnSet.classList.toggle('on', show);
+  if (show) syncSetPanel();
+}
+if (btnSet) btnSet.addEventListener('click', toggleSetPanel);
+if (volMaster) volMaster.addEventListener('input', e => { initAudio(); setVolume('master', e.target.value / 100); });
+if (volSfx)    volSfx.addEventListener('input',    e => setVolume('sfx',    e.target.value / 100));
+if (volMusic)  volMusic.addEventListener('input',  e => setVolume('music',  e.target.value / 100));
+if (chkBgm)    chkBgm.addEventListener('change',   e => { initAudio(); setBgmOn(e.target.checked); });
 function togglePause(){
   paused = !paused;
   btnPause.textContent = paused ? '▶ 继续' : '⏸ 暂停';
@@ -2582,6 +2966,8 @@ btnPause.addEventListener('click', togglePause);
 if (btnFlash) btnFlash.addEventListener('click', toggleReduceMotion);
 if (btnStart) btnStart.addEventListener('click', () => { initAudio(); requestStart(); });
 syncReduceMotionBtn();
+syncMuteBtn();        // 工具按钮就位后再同步（muted 已从 localStorage 恢复）
+syncSetPanel();
 
 /* 开始按钮文案随状态切换（手机端主要入口） */
 let startBtnLabel = '';
@@ -2613,12 +2999,16 @@ function loop(now){
       netSendAcc += dt;
       if (netSendAcc >= 0.05){
         netSendAcc = 0;
-        if (netMode === 'host' && state === 'playing') Net.send({ type:'state', snap: serializeSnapshot() });
-        else if (netMode === 'guest') Net.send({ type:'input', k: packInput(keys2) });
+        // 背压：上行积压时跳过一次快照，避免弱网下雪崩（输入包极小，永不跳过）
+        if (netMode === 'host' && state === 'playing' && Net.bufferedAmount() < 262144){
+          Net.send({ type:'state', snap: serializeSnapshot() });
+        }
+        else if (netMode === 'guest') Net.send({ type:'input', k: packInput(keys2), ack: applySnapshot.lastSeq });
       }
     }
   }
   render();
+  syncBgm();          // 按状态切换背景音乐（无 AudioContext / 关掉音乐时为空操作）
   syncStartBtn();
   requestAnimationFrame(loop);
 }
