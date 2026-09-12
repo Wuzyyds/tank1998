@@ -1,0 +1,90 @@
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0d1117; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh;
+  font-family:"Segoe UI","Microsoft YaHei",sans-serif; -webkit-tap-highlight-color:transparent; overflow:auto; }
+h1 { color:#f0c040; text-shadow:0 3px 0 #7a5200; font-size:30px; letter-spacing:8px; margin:14px 0 4px; }
+.sub { color:#8b949e; font-size:13px; margin-bottom:10px; letter-spacing:2px; text-align:center; }
+#wrap { position:relative; }
+canvas { width:min(680px,96vw); height:auto; aspect-ratio:680/520; image-rendering:auto;
+  border:4px solid #30363d; border-radius:10px; background:#000; display:block; touch-action:none; }
+/* 全图模式：画面等比放大填满窗口 */
+body.fit h1, body.fit .sub, body.fit footer, body.fit .toolbar { display:none; }
+body.fit { justify-content:flex-start; }
+body.fit #wrap { margin:0; }
+body.fit canvas { width:min(100vw, calc(100vh * 680 / 520)); border-width:0; border-radius:0; }
+footer { color:#565d66; font-size:12px; margin:10px 0 6px; text-align:center; }
+.toolbar { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; justify-content:center; }
+.toolbar button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:8px;
+  padding:7px 14px; font-size:13px; cursor:pointer; font-family:inherit; }
+.toolbar button:hover { background:#30363d; }
+.toolbar button.on { background:#1f6feb; border-color:#388bfd; color:#fff; }
+.toolbar button:disabled { opacity:.45; cursor:default; }
+.toolbar #btn-start { background:#1f6feb; border-color:#388bfd; color:#fff; font-weight:600; }
+.toolbar #btn-start:hover { background:#388bfd; }
+/* 触屏设备：放大按钮，便于手指点按 */
+@media (pointer:coarse){
+  .toolbar button { padding:11px 18px; font-size:15px; border-radius:10px; }
+  .toolbar #btn-start { padding:11px 26px; font-size:16px; }
+  footer { padding:0 12px; line-height:1.7; }
+}
+#touchpad { position:absolute; inset:0; display:none; pointer-events:none; }
+@media (pointer:coarse){ #touchpad { display:block; } }
+.tbtn { position:absolute; pointer-events:auto; user-select:none; touch-action:none;
+  display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
+/* 左下角虚拟摇杆：固定底盘 + 可拖动摇杆头，方向落定为 上/下/左/右 */
+#joystick { position:absolute; left:4%; bottom:7%;
+  width:128px; height:128px; border-radius:50%;
+  background:radial-gradient(circle at 50% 50%, rgba(255,255,255,.06), rgba(255,255,255,.12));
+  border:2px solid rgba(255,255,255,.22);
+  pointer-events:auto; touch-action:none; user-select:none; }
+#joy-knob { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:58px; height:58px; border-radius:50%;
+  background:radial-gradient(circle at 38% 34%, #ffe9a8, #f0c040 70%);
+  border:2px solid rgba(255,255,255,.5);
+  box-shadow:0 4px 10px rgba(0,0,0,.35); transition:transform .04s linear; }
+#joystick.active { border-color:rgba(240,192,64,.55); }
+#joystick .arrow { position:absolute; color:rgba(255,255,255,.5); font-size:16px; pointer-events:none; }
+#joystick .a-up    { left:50%; top:6px;  transform:translateX(-50%); }
+#joystick .a-down  { left:50%; bottom:6px; transform:translateX(-50%); }
+#joystick .a-left  { left:8px;  top:50%; transform:translateY(-50%); }
+#joystick .a-right { right:8px; top:50%; transform:translateY(-50%); }
+/* 右下角开火键：大号、拇指易触 */
+#pad-fire { right:5%; bottom:9%; width:92px; height:92px; border-radius:50%;
+  background:radial-gradient(circle at 40% 36%, rgba(255,210,120,.32), rgba(240,192,64,.18));
+  border:3px solid rgba(240,192,64,.55); color:#f0c040; font-size:26px; font-weight:700;
+  letter-spacing:2px; }
+#pad-fire:active { background:radial-gradient(circle at 40% 36%, rgba(255,210,120,.55), rgba(240,192,64,.32)); }
+/* 双人合作：房间弹窗 */
+.overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.66); z-index:50; padding:16px; }
+.overlay.show { display:flex; }
+.coop-box { width:min(380px,94vw); background:#161B22; border:1px solid #30363d; border-radius:14px;
+  padding:22px 22px 18px; color:#c9d1d9; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+.coop-box h2 { color:#f0c040; font-size:20px; margin-bottom:12px; letter-spacing:2px; }
+.coop-hint { color:#8b949e; font-size:12.5px; line-height:1.7; margin-bottom:16px; }
+.coop-hint b { color:#7FD0FF; }
+.coop-row { display:flex; gap:10px; margin-bottom:12px; }
+.coop-row input { flex:1; background:#0d1117; border:1px solid #30363d; border-radius:8px;
+  color:#fff; font-size:18px; letter-spacing:6px; text-transform:uppercase; padding:9px 12px;
+  font-family:inherit; text-align:center; }
+.coop-row input:focus { outline:none; border-color:#388bfd; }
+.coop-row button { background:#1f6feb; border:1px solid #388bfd; color:#fff; border-radius:8px;
+  padding:9px 16px; font-size:14px; cursor:pointer; font-family:inherit; white-space:nowrap; }
+.coop-row button:hover { background:#388bfd; }
+#btn-coop-close { background:#21262d; border-color:#30363d; }
+#btn-coop-close:hover { background:#30363d; }
+.coop-code-display { color:#7FD0FF; font-size:bold; font-size:22px; letter-spacing:6px; text-align:center;
+  min-height:26px; margin:4px 0 6px; }
+.coop-status { color:#FFD23F; font-size:13px; text-align:center; min-height:18px; line-height:1.5; }
+/* 无障碍：系统开启「减少动效」时关闭 CSS 过渡动画（配合 game.js 的闪烁降频） */
+@media (prefers-reduced-motion: reduce){
+  #joy-knob { transition:none; }
+  .toolbar button { transition:none; }
+}
+/* 手机竖屏提示：横屏后画布按 680px 满幅显示，HUD 更易读 */
+#rotate-hint { display:none; }
+@media (pointer:coarse) and (orientation:portrait){
+  #rotate-hint { display:block; margin:0 12px 8px; padding:6px 12px; border-radius:8px;
+    background:rgba(31,111,235,.15); border:1px solid rgba(56,139,253,.45);
+    color:#9CC7FF; font-size:13px; text-align:center; }
+}
+

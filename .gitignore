@@ -1,0 +1,22 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+
+# 日志与临时文件
+*.log
+_check.log
+_verify.log
+_env.txt
+_vc.txt
+_diag.txt
+_lines.txt
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 本地工具状态（WorkBuddy 会话记忆等，含本机绝对路径；如需版本化可删除本行）
+.workbuddy/

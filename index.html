@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="DkS6HxjnnOBsLeIwsbynbb">
+<head data-page-node-id="fEL2B0mbSJ11ZBbDQrjqCK">
+<meta charset="UTF-8" data-page-node-id="GXetaSPsXO1DD4GdCaSUdE">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" data-page-node-id="QfSBoUwJugzLWHpjuJFqU2">
+<title>坦克大战 1998 · 增强版</title>
+<link rel="stylesheet" href="style.css" data-page-node-id="O3zRWv9tiQPWCAqSutgi0E">
+<!-- PWA：可安装 + 离线 -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d1117">
+<link rel="icon" href="assets/icons/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="坦克1998">
+<script src="assets/sounds.js" defer></script>
+<script src="net.js" defer></script>
+<script src="game.js" defer></script>
+</head>
+<body data-page-node-id="9788yFON9sf9Sj9v65yzMs">
+<h1 data-page-node-id="QCyVPedsXkQYzCfZp5Dc1L">坦克大战</h1>
+<div class="sub" data-page-node-id="g0fdJnETS5qrHl1hMnG1TW">TANK 1998 · 增强版 · 3 级火力 · 7 种武器 · 随机地形 · 智能敌军</div>
+<div id="rotate-hint">建议横屏游玩：画面更大、摇杆更好按</div>
+<div class="toolbar" data-page-node-id="l7BE12SVpwE9CzoX5Aj8vK">
+  <button id="btn-start">▶ 开始游戏</button>
+  <button id="btn-coop">👥 双人游戏</button>
+  <button id="btn-fit" data-page-node-id="aMC4shADBC33GTMfUAXZn6">⛶ 全图</button>
+  <button id="btn-fs" data-page-node-id="AmEndVbNzWxRjVARJ950Wl">🔲 全屏</button>
+  <button id="btn-mute" data-page-node-id="gjqCYcV84yLEbnSYasK9qT">🔊 音效</button>
+  <button id="btn-flash" title="减少画面闪烁（无障碍，遵循 WCAG 2.3.1）">⚡ 闪烁：正常</button>
+  <button id="btn-pause" data-page-node-id="Wrt68IkW9tNx6zLWDzbmQB">⏸ 暂停</button>
+</div>
+<div id="wrap" data-page-node-id="3u7joqQMIewsonERqcJzxo">
+<canvas id="game" width="680" height="520" data-page-node-id="ikkSJFuA69Y8OMU0x7AWrN"></canvas>
+<div id="touchpad" data-page-node-id="FA3nSc6AfkJk2CqukGGs68">
+  <div id="joystick" data-page-node-id="joyBase">
+    <span class="arrow a-up">▲</span>
+    <span class="arrow a-down">▼</span>
+    <span class="arrow a-left">◀</span>
+    <span class="arrow a-right">▶</span>
+    <div id="joy-knob" data-page-node-id="joyKnob"></div>
+  </div>
+  <div class="tbtn" id="pad-fire" data-k="Space" data-page-node-id="weQraFg2caTjD1kHe3pyBF">开火</div>
+</div>
+</div>
+<!-- 双人合作：房间创建 / 加入 -->
+<div id="coop-overlay" class="overlay">
+  <div class="coop-box">
+    <h2>双人合作闯关</h2>
+    <p class="coop-hint">
+      同一 WiFi：让好友打开 <b id="coop-lan">…</b><br>
+      跨网络：把本机 8080 端口映射到公网，再让好友用你的公网 IP 访问。
+    </p>
+    <div class="coop-row">
+      <input id="room-code" maxlength="4" placeholder="房间号" autocomplete="off" />
+      <button id="btn-join">加入房间</button>
+    </div>
+    <div class="coop-row">
+      <button id="btn-create">创建房间</button>
+      <button id="btn-coop-close">关闭</button>
+    </div>
+    <div id="coop-code-display" class="coop-code-display"></div>
+    <div id="coop-status" class="coop-status"></div>
+  </div>
+</div>
+<footer>点按屏幕开始 · 摇杆移动 · 开火键射击 · 方向键/WASD移动 · 空格射击 · H 血量档位 · P 暂停 · M 静音 · 敌人也会抢道具 · 子弹相撞：等级高者吞掉低者并降级</footer>
+<script>
+/* 注册 Service Worker（仅在 http/https 下；离线可玩、可安装到主屏） */
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* 忽略注册失败 */ });
+  });
+}
+</script>
+</body>
+</html>
