@@ -1,6 +1,6 @@
 {
   "name": "tank1998-enhanced",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "坦克大战 1998 增强版 —— HTML5 Canvas 单机闯关 + 双人合作联机（零依赖、无构建）",
   "main": "server.js",
