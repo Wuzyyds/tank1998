@@ -95,6 +95,15 @@ async function integration() {
     assert('加入不存在的房间返回 ROOM_NOT_FOUND', !!notFound);
     G2.close();
 
+    // 静态资源：PWA 清单 / 图标 / Service Worker 应可访问且 MIME 正确
+    const mRes = await fetch('http://127.0.0.1:' + PORT + '/manifest.webmanifest');
+    const mType = mRes.headers.get('content-type') || '';
+    assert('manifest.webmanifest 以 manifest+json 提供', mRes.status === 200 && mType.indexOf('manifest') >= 0, mRes.status + ' ' + mType);
+    const iRes = await fetch('http://127.0.0.1:' + PORT + '/assets/icons/icon-192.png');
+    assert('PWA 图标以 image/png 提供', iRes.status === 200 && (iRes.headers.get('content-type') || '').indexOf('image/png') >= 0, iRes.status + ' ' + (iRes.headers.get('content-type') || ''));
+    const swRes = await fetch('http://127.0.0.1:' + PORT + '/sw.js');
+    assert('Service Worker 可访问', swRes.status === 200 && (swRes.headers.get('content-type') || '').indexOf('javascript') >= 0, swRes.status);
+
     // 掉线通知：关闭客方，房主应收到 peer.dropped
     const dropP = waitMsg(H, m => m.type === 'peer' && m.event === 'dropped', 3000);
     G.close();

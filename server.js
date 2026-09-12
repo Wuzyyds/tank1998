@@ -31,6 +31,7 @@ const MIME = {
   '.wav':  'audio/wav',
   '.mp3':  'audio/mpeg',
   '.json':  'application/json',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.ico':  'image/x-icon',
 };
 
