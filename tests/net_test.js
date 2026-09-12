@@ -221,6 +221,12 @@ function unit() {
   const hp = vm.runInContext("(function(){ var out = {}; window.devicePixelRatio = 2; setupHiDPI(); out.dpr = DPR; out.cw = canvas.width; out.ch = canvas.height; window.devicePixelRatio = undefined; setupHiDPI(); out.restore = DPR; return out; })()", context);
   assert('高分屏：DPR=2 时背板放大为 1360x1040', hp.dpr === 2 && hp.cw === 1360 && hp.ch === 1040, JSON.stringify(hp));
   assert('高分屏：无 DPR 时回退为 1（680x520）', hp.restore === 1, JSON.stringify(hp));
+
+  // 手机端 DOM HUD：核心信息同步正确（触屏下 canvas 面板被 CSS 裁掉，信息改由 DOM 呈现）
+  const hud = vm.runInContext("(function(){ netMode='off'; player2=null; score=1234; lives=2; lives2=3; level=7; player.power=3; enemyQueue=['basic','fast']; enemies=[]; syncHud(); var r={score:hudScore.textContent, lives:hudLives.textContent, level:hudLevel.textContent, power:hudPower.textContent, enemy:hudEnemy.textContent, coarse:coarsePointer}; score=0; return r; })()", context);
+  assert('DOM HUD：分数补零为 6 位', hud.score === '001234', JSON.stringify(hud));
+  assert('DOM HUD：生命/关卡/火力/敌余同步正确', hud.lives === '♥♥' && hud.level === '07' && hud.power === 'Lv3' && hud.enemy === '02', JSON.stringify(hud));
+  assert('DOM HUD：非触屏环境不启用（coarsePointer=false，桌面走 canvas 面板）', hud.coarse === false);
 }
 
 /* ---------- 单元：net.js 重连状态机（用假 WebSocket + 可控定时器） ---------- */

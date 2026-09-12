@@ -112,6 +112,22 @@ function setupHiDPI(){
 setupHiDPI();
 if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', setupHiDPI);
 
+/* 触屏设备识别：命中时 canvas 只保留游戏区（面板由 CSS 裁掉），
+ * 分数/命数/关卡等信息改由 DOM HUD（#hud）以正常字号呈现，解决小屏不可读问题。
+ * 桌面端 coarsePointer=false，canvas 内面板绘制路径完全不变。 */
+let coarsePointer = false;
+function syncCoarsePointer(){
+  try { coarsePointer = typeof matchMedia === 'function' && matchMedia('(pointer:coarse)').matches; }
+  catch (e) { coarsePointer = false; }
+}
+syncCoarsePointer();
+if (typeof window !== 'undefined' && window.addEventListener){
+  try {
+    const mq = typeof matchMedia === 'function' ? matchMedia('(pointer:coarse)') : null;
+    if (mq && mq.addEventListener) mq.addEventListener('change', syncCoarsePointer);
+  } catch (e) { /* 老浏览器忽略 */ }
+}
+
 /* ================= 资源清单（图片 / 音效，全部带回退） =================
  * 坦克图 28x36：炮管朝上（dir=0），内容居中，带透明通道 → 中心对齐 + 旋转绘制
  * 道具图 48x48：主题色底 + 黑色图标区 → 缩放铺满一个格子 (20x20)
@@ -1985,14 +2001,15 @@ function render(){
     if (map[r][c] === TREE) drawTree(c*TILE, r*TILE);
   }
   if (!baseAlive) drawBaseBroken(12*TILE, 24*TILE);
-  drawPanel();
+  if (!coarsePointer) drawPanel();   // 触屏：canvas 面板已被 CSS 裁掉，信息改由 DOM HUD 呈现
   if (levelIntro > 0 && state === 'playing') drawCurtain();
   if (state === 'playing' && hintT > 0) drawHint();
   if (state === 'title') drawTitle();
   else if (state === 'over') drawOver();
   else if (state === 'clear') drawClear();
   if (paused && state === 'playing') drawPause();
-  if ((netMode !== 'off' || player2) && state === 'playing') drawCoopHud();
+  if (!coarsePointer && (netMode !== 'off' || player2) && state === 'playing') drawCoopHud();
+  syncHud();
 }
 
 /* 双人 HUD：左上角显示双方剩余生命与掉线状态 */
@@ -2124,6 +2141,38 @@ function drawPanel(){
     ctx.fillStyle = '#98A2AD'; ctx.font = '11px sans-serif';
     ctx.fillText('♪ 点按开启音效', x0+14, 514);
   }
+}
+
+/* ================= 手机端 DOM HUD =================
+ * 触屏设备上 canvas 面板被 CSS 裁掉，核心信息改由此处渲染：
+ * 字号固定 13~14px（不随画布等比缩小），小屏可读；桌面端 #hud 为 display:none。 */
+const hudEl     = document.getElementById('hud');
+const hudScore  = document.getElementById('hud-score');
+const hudLives  = document.getElementById('hud-lives');
+const hudLives2 = document.getElementById('hud-lives2');
+const hudLevel  = document.getElementById('hud-level');
+const hudPower  = document.getElementById('hud-power');
+const hudEnemy  = document.getElementById('hud-enemy');
+const _hudCache = Object.create(null);
+function hearts(n){                       // 避免依赖 String.prototype.repeat
+  let s = ''; for (let i = 0; i < n; i++) s += '♥'; return s || '—';
+}
+function setHud(node, val){
+  if (!node) return;
+  if (_hudCache[node.id] === val) return;  // 只有变化时才写 DOM，避免每帧重排
+  _hudCache[node.id] = val;
+  node.textContent = val;
+}
+function syncHud(){
+  if (!hudEl || !hudEl.classList) return;
+  const remain = enemyQueue.length + enemies.filter(e => !e.dead).length;
+  setHud(hudScore,  String(score).padStart(6, '0'));
+  setHud(hudLives,  lives  > 0 ? hearts(lives)  : '—');
+  setHud(hudLives2, lives2 > 0 ? hearts(lives2) : '—');
+  setHud(hudLevel,  String(level).padStart(2, '0'));
+  setHud(hudPower,  'Lv' + ((player && player.power) || 1));
+  setHud(hudEnemy,  String(remain).padStart(2, '0'));
+  hudEl.classList.toggle('coop', netMode !== 'off' || !!player2);
 }
 
 function overlayText(lines, big){
