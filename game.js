@@ -2303,6 +2303,26 @@ function drawCoopHud(){
   }
 }
 
+/* 玩家生命图标：18x18 坦克剪影（履带 + 车体 + 炮塔 + 炮管）。
+ * 关键：上一版用「黄方块+两根竖条」让部分用户看成「老鹰的脸」——
+ * 而「老鹰」在本游戏中是基地的象征，用在玩家命槽会语义错乱。
+ * 改用带炮塔/炮管的明确坦克轮廓，玩家槽 ↔ 坦克，基地 ↔ 老鹰。 */
+function drawLifeIcon(x, y){
+  // 左右履带（深灰）
+  px(x+0,  y+5, 3, 9, '#4A4F57');
+  px(x+15, y+5, 3, 9, '#4A4F57');
+  // 履带内侧高光（让"履带"更像履带，不是"两条竖线"）
+  px(x+3,  y+5, 1, 9, '#A9B4C0');
+  px(x+14, y+5, 1, 9, '#A9B4C0');
+  // 车体（玩家黄 + 顶面高光）
+  px(x+3,  y+5, 12, 9, '#F5C518');
+  px(x+3,  y+5, 12, 2, '#FFE987');
+  // 炮塔（深棕，圆墩）
+  px(x+7,  y+7, 4, 4, '#8A6200');
+  // 炮管（朝上）
+  px(x+8,  y+0, 2, 8, '#4A4F57');
+}
+
 /* ================= 面板 ================= */
 function drawPanel(){
   const x0 = PLAY_W;
@@ -2331,9 +2351,7 @@ function drawPanel(){
   ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
   ctx.fillText('生命 LIVES', x0+14, 178);
   for (let i = 0; i < Math.max(0, lives); i++){
-    px(x0+14+i*26, 186, 18, 18, '#FFD23F');
-    px(x0+14+i*26, 190, 4, 10, '#A87A00');
-    px(x0+26+i*26, 190, 4, 10, '#A87A00');
+    drawLifeIcon(x0+14+i*26, 186);
   }
 
   ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
@@ -2771,25 +2789,19 @@ function coopInit(){
 function coopRefreshLan(){
   const el = coopEl('coop-lan');
   if (!el) return;
-  getLanIP().then(ip => { el.textContent = ip ? ('http://' + ip + ':8080') : '（请在系统设置中查看本机局域网 IP）'; })
-             .catch(() => { el.textContent = '（请在系统设置中查看本机局域网 IP）'; });
+  el.textContent = '正在检测局域网地址…';
+  getLanIP().then(ip => { el.textContent = ip ? ('http://' + ip + ':8080') : '（未检测到可用局域网 IP，请在系统设置中查看）'; })
+             .catch(() => { el.textContent = '（未检测到可用局域网 IP，请在系统设置中查看）'; });
 }
 
-/* 尽力获取局域网 IP（WebRTC ICE），失败则提示手动查看 */
+/* 局域网 IP 优先由 server 的 /lan 端点给出：
+ * server 侧能读取本机所有网卡，过滤掉 169.254.x.x（APIPA）与虚拟网卡，
+ * 这比浏览器 WebRTC ICE 更可靠，避免像 169.254.83.59 这种不可达地址。 */
 function getLanIP(){
-  return new Promise((resolve) => {
-    try {
-      const pc = new RTCPeerConnection({ iceServers: [] });
-      pc.createDataChannel('');
-      pc.onicecandidate = e => {
-        if (!e.candidate) return;
-        const m = /([0-9]{1,3}(\.[0-9]{1,3}){3})/.exec(e.candidate.candidate);
-        if (m){ try { pc.close(); } catch(_){} resolve(m[1]); }
-      };
-      pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => resolve(''));
-      setTimeout(() => { try { pc.close(); } catch(_){} resolve(''); }, 1500);
-    } catch(e){ resolve(''); }
-  });
+  return fetch('/lan')
+    .then(r => r.ok ? r.json() : null)
+    .then(j => (j && j.ip && typeof j.ip === 'string') ? j.ip : '')
+    .catch(() => '');
 }
 
 /* ================= 输入 ================= */

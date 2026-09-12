@@ -64,6 +64,13 @@ async function integration() {
   const srv = await startServer();
   let code = '';
   try {
+    // server 会优先返回真实内网地址；过滤 APIPA（169.254.x.x）与虚拟网卡
+    const lanResp = await fetch('http://127.0.0.1:' + PORT + '/lan');
+    const lanJson = await lanResp.json();
+    assert('/lan 端点返回 JSON 且端口一致', lanResp.ok && lanJson.port === PORT && typeof lanJson.url === 'string', JSON.stringify(lanJson));
+    assert('/lan 不返回 169.254.x.x APIPA 地址', !lanJson.ip || !/^169\.254\./.test(lanJson.ip), lanJson.ip);
+    assert('/lan 不返回 127.x.x.x 本机回环', !lanJson.ip || !/^127\./.test(lanJson.ip), lanJson.ip);
+
     const H = await wsClient();
     send(H, { type: 'room', action: 'create' });
     const created = await waitMsg(H, m => m.type === 'room' && m.action === 'created');
@@ -332,6 +339,13 @@ function unit() {
   const smoke = vm.runInContext("(function(){ var err = null, out = {}; try { netMode = 'off'; player2 = null; startGame(); level = 5; startLevel(); enemies = [makeTank(6, 3, 2, 'boss', {invuln:0})]; enemies[0].hp = 7; enemyQueue = ['armor','power','bonus']; items = [{x:5,y:5,px:110,py:110,type:'laser',t:0,dead:false}]; for (var i = 0; i < 220; i++){ gameTime += 0.016; update(0.016); render(); syncBgm(); } out.bossTag = levelTag(); out.theme5 = levelThemeName; level = 4; startLevel(); for (var j = 0; j < 120; j++){ gameTime += 0.016; update(0.016); render(); } out.eliteTag = levelTag(); out.theme4 = levelThemeName; out.enemyCount = enemyQueue.length; } catch(e){ err = e.message + ' @ ' + (e.stack || '').split('\\n')[1]; } return { err: err, out: out }; })()", context);
   assert('高关卡冒烟：BOSS 关 + 精英关 340 帧 update/render 无异常', smoke.err === null, String(smoke.err));
   assert('高关卡冒烟：BOSS 关标签/地貌正确，精英关队列含 3 只精英', smoke.err === null && smoke.out.bossTag === 'BOSS' && smoke.out.theme5 === '草原' && smoke.out.eliteTag === '精英关' && smoke.out.theme4 === '草原' && smoke.out.enemyCount >= 3, JSON.stringify(smoke.out));
+
+  // 生命图标应明确为坦克剪影，避免黄方块+两根竖条被误读为「老鹰脸」
+  const iconCalls = vm.runInContext("(function(){ var calls = []; ctx.fillRect = function(x,y,w,h){ calls.push([x,y,w,h,ctx.fillStyle]); }; drawLifeIcon(10, 10); return calls; })()", context);
+  const hasBarrel = iconCalls.some(c => c[4] === '#4A4F57' && c[0] === 18 && c[1] === 10 && c[2] === 2 && c[3] === 8);
+  const hasTurret = iconCalls.some(c => c[4] === '#8A6200' && c[0] === 17 && c[1] === 17 && c[2] === 4 && c[3] === 4);
+  const hasHull   = iconCalls.some(c => c[4] === '#F5C518' && c[0] === 13 && c[1] === 15 && c[2] === 12 && c[3] === 9);
+  assert('生命图标：包含炮管 + 炮塔 + 车体，明确是坦克而非老鹰脸', hasBarrel && hasTurret && hasHull, JSON.stringify({barrel:hasBarrel,turret:hasTurret,hull:hasHull}));
 }
 
 /* ---------- 单元：net.js 重连状态机（用假 WebSocket + 可控定时器） ---------- */

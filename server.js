@@ -43,6 +43,14 @@ function safeJoin(root, urlPath){
 }
 const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
+  // 客户端获取推荐局域网地址
+  if (urlPath === '/lan'){
+    const lan = pickLanIP();
+    const body = JSON.stringify({ ip: lan.ip, port: PORT, url: lan.ip ? ('http://' + lan.ip + ':' + PORT) : null });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(body);
+    return;
+  }
   if (urlPath === '/' || urlPath === '') urlPath = '/index.html';
   const filePath = safeJoin(ROOT, urlPath);
   if (!filePath){ res.writeHead(403); res.end('forbidden'); return; }
@@ -297,20 +305,58 @@ function scheduleDelete(code){
   }, RECONNECT_WINDOW);
 }
 
-/* ============ 启动 ============ */
-server.listen(PORT, '0.0.0.0', () => {
-  const ifaces = [];
+/* ============ 局域网 IP 选择：过滤 APIPA/虚拟网卡，优先私有网段 ============
+ * 同一 WiFi 下应返回 192.168.x.x / 10.x.x.x / 172.16-31.x.x 等真实内网地址。
+ * 169.254.x.x 是 APIPA（DHCP 失败），虚拟网卡（VMware/WSL/Docker/VPN）
+ * 通常无实际局域网可达性，应跳过。 */
+const VIRTUAL_NAME_RE = /vmware|hyper[-_]?v|virtual|veth|wsl|vmnet|vbox|tun|tap|hamachi|tailscale|zerotier|zt|cloudflare|warp|npcap|loopback|docker|ppp/i;
+function isPrivateIPv4(ip){
+  const parts = ip.split('.');
+  if (parts.length !== 4) return false;
+  const a = Number(parts[0]), b = Number(parts[1]);
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+function isUnusableIPv4(ip){
+  const parts = ip.split('.');
+  if (parts.length !== 4) return true;
+  const a = Number(parts[0]), b = Number(parts[1]);
+  if (a === 127) return true;          // loopback
+  if (a === 169 && b === 254) return true; // APIPA / link-local
+  return false;
+}
+function pickLanIP(){
+  let all = [], best = null;
   try {
     const os = require('os');
-    for (const list of Object.values(os.networkInterfaces())){
+    for (const [name, list] of Object.entries(os.networkInterfaces())){
+      if (VIRTUAL_NAME_RE.test(name)) continue;
       for (const ni of list){
-        if (ni.family === 'IPv4' && !ni.internal) ifaces.push(ni.address);
+        if (ni.family !== 'IPv4' || ni.internal) continue;
+        const ip = ni.address;
+        if (isUnusableIPv4(ip)) continue;
+        const score = isPrivateIPv4(ip) ? 100 : 1;
+        all.push({ ip, name, score });
+        if (!best || score > best.score) best = all[all.length - 1];
       }
     }
   } catch(e) {}
+  return { ip: best ? best.ip : null, all };
+}
+
+/* ============ 启动 ============ */
+server.listen(PORT, '0.0.0.0', () => {
+  const lan = pickLanIP();
   console.log('TANK 1998 双人服务器已启动');
   console.log('  本机：  http://localhost:' + PORT);
-  if (ifaces.length) console.log('  局域网：http://' + ifaces[0] + ':' + PORT + '  （同 WiFi 设备用此地址）');
+  if (lan.ip) console.log('  局域网：http://' + lan.ip + ':' + PORT + '  （同 WiFi 设备用此地址）');
+  else console.log('  未检测到可用局域网 IPv4，请在系统设置中手动查看本机 IP');
+  if (lan.all.length > 1){
+    const others = lan.all.filter(x => x.ip !== lan.ip).map(x => x.ip + (x.score >= 100 ? '' : '[公网/特殊]')).join(', ');
+    console.log('  其他候选：' + others);
+  }
   console.log('  双人：打开页面 → 双人游戏 → 创建/加入房间');
   console.log('  跨互联网：把上述端口在路由器/云主机映射后，把地址发给朋友');
 });
