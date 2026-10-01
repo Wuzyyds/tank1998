@@ -111,9 +111,18 @@ node tests/net_test.js      # 中继协议 + 同步逻辑 + 断线重连 + 无�
 ```bash
 node tools/profile.js       # 渲染剖析：每帧 canvas 绘制指令数 + JS 耗时 + 按函数归因
 node tools/balance.js 20    # 受控压力测试：脚本 AI 代打前 20 关，输出难度曲线
+node tools/e2e_coop.js      # 双人联机端到端：真 server + 真 WebSocket + 两端跑真 game.js
 ```
 
-两个工具都可复现、可在改动前后直接对比。`balance.js` 用固定随机种子，
+`e2e_coop.js` 补的是 `net_test.js` 覆盖不到的那一段：`net_test` 验证**协议转发**
+（谁发给谁、`from` 标签对不对），而联机「卡住 / 摇杆没反应」这类问题只会在
+**跨端口径**下暴露。它会真起一个 `server.js`，两端各跑一份真 `game.js`，
+把快照与输入包真正经 WebSocket 互发，断言
+「客方按下摇杆 → 房主侧玩家2 真的位移 → 客方收到的快照位置一致」，
+以及首帧快照后 `body.idle` 解除（手机端摇杆可见）、松手即停、暂停双向同步。
+占用 8399 端口，跑完自动退出，失败时返回非 0 退出码。
+
+三个工具都可复现、可在改动前后直接对比。`balance.js` 用固定随机种子，
 并把基地设为不可毁、每关补满命数——它量的是**各档相对压力**，
 不能替代真人试玩（详见文件头部说明）。
 
@@ -231,7 +240,7 @@ manifest.webmanifest  PWA 清单
 sw.js                 Service Worker（离线缓存）
 CHANGELOG.md          变更日志（Keep a Changelog）
 assets/               图片 / 音频 / 内联音频兜底
-tools/                资源生成脚本（音效 / 图标）+ 性能剖析 + 平衡压力测试
+tools/                资源生成脚本（音效 / 图标）+ 性能剖析 + 平衡压力测试 + 联机端到端探针
 tests/                无头测试（Node）
 ```
 
