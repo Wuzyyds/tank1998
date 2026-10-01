@@ -570,8 +570,10 @@ let actx = null;
 /* ---- 音量总线：源 → 音效/音乐总线 → 主总线 → destination ----
  * 原先每个音源都直连 destination，只能整体静音、且设置不持久化。
  * 现在三级可分别调节并写入 localStorage。 */
-const VOL = { master: 0.8, sfx: 0.9, music: 0.45 };
-let masterGain = null, sfxGain = null, musicGain = null;
+/* 存的是「滑杆位置 0~1」，实际增益经 volCurve() 近似等响度后使用。
+ * 默认值按曲线反推，保证初始响度与旧版接近（0.9²≈0.81 对应旧 0.8）。 */
+const VOL = { master: 0.9, sfx: 0.95, music: 0.65 };
+let masterGain = null, sfxGain = null, musicGain = null, limiter = null;
 try {
   const sv = JSON.parse(localStorage.getItem('tank1998_vol') || '{}');
   for (const k in VOL) if (typeof sv[k] === 'number') VOL[k] = Math.max(0, Math.min(1, sv[k]));
@@ -585,14 +587,33 @@ function audioBusInit(){
     musicGain  = actx.createGain();
     sfxGain.connect(masterGain);
     musicGain.connect(masterGain);
-    masterGain.connect(actx.destination);
+    /* 总线上挂一个限幅器：后期敌我数十门炮同时开火、爆炸、吃道具与 BGM 叠加时，
+     * 各音源线性相加会超过 0dBFS → 硬削波，听感是"噼啪"爆音。
+     * -8dB 以上按 12:1 压制，既压住峰值又几乎听不出动态损失。 */
+    try {
+      limiter = actx.createDynamicsCompressor();
+      limiter.threshold.value = -8;
+      limiter.knee.value = 6;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.25;
+      masterGain.connect(limiter);
+      limiter.connect(actx.destination);
+    } catch(e) {
+      limiter = null;                          // 极简实现（无压缩器）时直连，不影响出声
+      masterGain.connect(actx.destination);
+    }
     applyVolumes();
   } catch(e) { masterGain = sfxGain = musicGain = null; }
 }
+/* 滑杆是线性 0~1，但人耳对响度的感知接近对数：
+ * 直接把滑杆值当增益用，会出现「下半程几乎听不出变化、上半程骤降」。
+ * 平方曲线近似等响度，滑杆手感才接近线性。（0.5²=0.25 ≈ -12dB，接近"一半响度"） */
+function volCurve(v){ const x = Math.max(0, Math.min(1, v)); return x * x; }
 function applyVolumes(){
-  if (masterGain) masterGain.gain.value = muted ? 0 : VOL.master;
-  if (sfxGain)    sfxGain.gain.value    = VOL.sfx;
-  if (musicGain)  musicGain.gain.value  = VOL.music;
+  if (masterGain) masterGain.gain.value = muted ? 0 : volCurve(VOL.master);
+  if (sfxGain)    sfxGain.gain.value    = volCurve(VOL.sfx);
+  if (musicGain)  musicGain.gain.value  = volCurve(VOL.music);
 }
 function sfxOut(){ return sfxGain || (actx && actx.destination); }
 
@@ -632,6 +653,11 @@ function bgmSchedule(){
   const tr = BGM[bgmName];
   const step = 60 / tr.bpm / 2;
   const lead = tr.lead.split(' '), bass = tr.bass.split(' ');
+  /* 卡顿保护：主线程一旦停顿（GC / 长帧 / 后台节流），bgmNextT 会落后于
+   * actx.currentTime，补排循环就把一串音符全塞进"过去的时间点"——
+   * Web Audio 会立即齐发，变成一声噪音爆音。
+   * 落后超过半拍就对齐到当前时间：宁可少几个音，也不要爆音。 */
+  if (bgmNextT < actx.currentTime - step * 0.5) bgmNextT = actx.currentTime + 0.03;
   let guard = 0;
   while (bgmNextT < actx.currentTime + 0.45 && guard++ < 64){
     const li = bgmStep % lead.length, bi = bgmStep % bass.length;
@@ -719,7 +745,7 @@ function noise(dur, vol){
     src.start(t); src.stop(t + dur);
   } catch(e) {}
 }
-const sfx = {
+const sfxRaw = {
   shoot()    { if (playSnd('shoot')) return; beep(620, 0.08, 'square', 0.10, 180); },
   brick()    { if (playSnd('brick')) return; beep(280, 0.06, 'square', 0.12, 120); },
   steel()    { if (playSnd('steel')) return; beep(950, 0.05, 'square', 0.09); },
@@ -734,6 +760,24 @@ const sfx = {
   clear()    { if (playSnd('clear')) return; [523,659,784,1047].forEach((f,i) => setTimeout(() => beep(f, 0.14, 'square', 0.14), i*110)); },
   over()     { if (playSnd('over')) return; [392,330,262,196].forEach((f,i) => setTimeout(() => beep(f, 0.22, 'sawtooth', 0.14), i*170)); },
 };
+/* 同名音效节流：后期双方几十门炮同时开火，逐发发声会糊成一片，
+ * 并在一瞬间创建几十个音频节点。高频音效设最小间隔后听感更清晰。
+ * 间隔远小于任何坦克的射速（fire 量级 0.2s+），正常操作不会漏音。 */
+const SFX_MIN_GAP = { shoot: 0.03, brick: 0.02, steel: 0.02, spark: 0.03 };
+const sfxLastAt = Object.create(null);
+function sfxThrottled(name){
+  const gap = SFX_MIN_GAP[name];
+  if (!gap) return false;
+  const now = actx ? actx.currentTime : gameTime;
+  const last = sfxLastAt[name];
+  if (last !== undefined && now - last < gap) return true;
+  sfxLastAt[name] = now;
+  return false;
+}
+const sfx = {};
+for (const k in sfxRaw){
+  sfx[k] = (key => () => { if (!sfxThrottled(key)) sfxRaw[key](); })(k);
+}
 
 /* ================= 游戏状态 ================= */
 let state = 'title';        // title | playing | clear | over

@@ -469,6 +469,79 @@ assert('M5 存活/剩余计数正确（无分配循环取代 filter）',
        countAlive(enemies) === 2 && remainEnemyCount() === 5,
        'alive=' + countAlive(enemies) + ' remain=' + remainEnemyCount());
 enemies = savedEnemies; enemyQueue = savedQueue;
+
+/* ---------- N. 音频：等响度曲线 / 总线限幅 / 卡顿爆音防护 / 音效节流 ---------- */
+assert('N1 音量曲线为感知近似（平方）：0→0、0.5→0.25、1→1，且越界夹紧',
+       volCurve(0) === 0 && volCurve(1) === 1 &&
+       Math.abs(volCurve(0.5) - 0.25) < 1e-9 &&
+       volCurve(-3) === 0 && volCurve(9) === 1,
+       '0.5→' + volCurve(0.5) + ' /1.5→' + volCurve(1.5));
+
+/* 注入假总线对象，验证 applyVolumes 写入的是曲线后的增益 */
+const nSavedM = masterGain, nSavedS = sfxGain, nSavedMu = musicGain, nSavedMuted = muted;
+const nSavedVol = { master: VOL.master, sfx: VOL.sfx, music: VOL.music };
+masterGain = { gain:{ value:-1 } }; sfxGain = { gain:{ value:-1 } }; musicGain = { gain:{ value:-1 } };
+VOL.master = 0.5; VOL.sfx = 1; VOL.music = 0.25;
+applyVolumes();
+const nCurveOk = Math.abs(masterGain.gain.value - 0.25) < 1e-9 &&
+                 sfxGain.gain.value === 1 &&
+                 Math.abs(musicGain.gain.value - 0.0625) < 1e-9;
+muted = true; applyVolumes();
+const nMuteOk = masterGain.gain.value === 0 && sfxGain.gain.value === 1;   // 静音只压主总线
+muted = false;
+masterGain = nSavedM; sfxGain = nSavedS; musicGain = nSavedMu; muted = nSavedMuted;
+VOL.master = nSavedVol.master; VOL.sfx = nSavedVol.sfx; VOL.music = nSavedVol.music;
+assert('N2 applyVolumes 写入平方增益；静音只把主总线压 0', nCurveOk && nMuteOk,
+       'master=' + volCurve(0.5) + ' music=' + volCurve(0.25));
+
+/* 假 AudioContext：验证总线链路 sfx/music → master → 限幅器 → destination */
+const nBusLog = [];
+const nFakeDest = { __dest:true };
+const nSavedActx = actx;
+actx = {
+  currentTime: 0, destination: nFakeDest,
+  createGain: () => ({ gain:{ value:0 }, connect: n => nBusLog.push(n) }),
+  createDynamicsCompressor: () => ({ threshold:{value:0}, knee:{value:0}, ratio:{value:0},
+                                     attack:{value:0}, release:{value:0}, connect: n => nBusLog.push(n) }),
+};
+masterGain = sfxGain = musicGain = limiter = null;
+audioBusInit();
+assert('N3 音频总线接入限幅器（sfx/music → master → compressor → destination）',
+       !!masterGain && !!sfxGain && !!musicGain && !!limiter &&
+       nBusLog.indexOf(masterGain) >= 0 && nBusLog.indexOf(limiter) >= 0 && nBusLog.indexOf(nFakeDest) >= 0,
+       'bus=' + nBusLog.length);
+
+/* BGM 爆音防护：bgmNextT 落后当前时间时，不许把音符排到"过去"（会立即齐发成爆音） */
+const nStarted = [];
+actx = {
+  currentTime: 100, destination: nFakeDest,
+  createOscillator: () => ({
+    type:'', frequency:{ setValueAtTime(){}, exponentialRampToValueAtTime(){} },
+    connect(){}, start(t){ nStarted.push(t); }, stop(){},
+  }),
+  createGain: () => ({ gain:{ setValueAtTime(){}, exponentialRampToValueAtTime(){} }, connect(){} }),
+};
+const nSavedBgm = { name: bgmName, step: bgmStep, next: bgmNextT };
+bgmName = 'battle'; bgmStep = 0;
+bgmNextT = 100 - 10;            // 模拟主线程卡顿 10 秒后落后
+bgmSchedule();
+const nMinT = nStarted.length ? Math.min.apply(null, nStarted) : Infinity;
+assert('N4 BGM 卡顿后不补排"过去"的音符（防爆音）',
+       nStarted.length > 0 && nMinT >= 100,
+       'notes=' + nStarted.length + ' minT=' + nMinT);
+bgmName = nSavedBgm.name; bgmStep = nSavedBgm.step; bgmNextT = nSavedBgm.next;
+actx = nSavedActx;
+
+/* 同名音效节流：高频音效 30ms 内重复触发应被吞掉；非高频音效不受影响 */
+sfxLastAt.shoot = undefined; sfxLastAt.boom = undefined;
+sfx.shoot();
+const nT1 = sfxLastAt.shoot;
+sfx.shoot();                    // 紧接第二次 → 应被节流
+const nT2 = sfxLastAt.shoot;
+sfx.boom();
+assert('N5 同名音效节流生效（shoot 连发被吞、boom 不受限）',
+       nT1 !== undefined && nT2 === nT1 && sfxLastAt.boom === undefined,
+       'shoot=' + nT1 + '/' + nT2 + ' boom=' + sfxLastAt.boom);
 `;
 
 let err = null;
