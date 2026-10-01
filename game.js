@@ -3030,6 +3030,29 @@ function unpackInput(b){
 /* ================= 双人合作：连接与 UI ================= */
 function coopEl(id){ return document.getElementById(id); }
 function coopSetStatus(msg){ const el = coopEl('coop-status'); if (el) el.textContent = msg || ''; }
+
+/* ---- 联机状态横幅（始终可见） ----
+ * 掉线 / 重连 / 等待房主这类状态原先只写在联机弹窗的 #coop-status 上，而弹窗在
+ * 开局后就被关掉了：手机端客方于是完全看不到提示，偏偏客方画面是纯快照驱动的
+ * （不跑模拟），房主一掉线画面立刻冻住 —— 用户看到的就是「游戏卡死、摇杆没反应」。
+ * 这里补一条压在游戏区顶部的横幅，ttlSec 省略表示常驻到被下一条状态覆盖。 */
+const netBanner = document.getElementById('net-banner');
+let bannerMsg = '', bannerUntil = 0;
+function coopBanner(msg, ttlSec){
+  if (!netBanner) return;
+  bannerMsg = msg || '';
+  bannerUntil = (bannerMsg && ttlSec) ? (performance.now() + ttlSec * 1000) : 0;
+  applyBanner();
+}
+function applyBanner(){
+  if (!netBanner) return;
+  const show = !!bannerMsg && (!bannerUntil || performance.now() < bannerUntil);
+  const text = show ? bannerMsg : '';
+  if (netBanner.__k === text) return;      // 内容不变时不碰 DOM，可安全每帧调用
+  netBanner.__k = text;
+  netBanner.textContent = text;
+  if (netBanner.classList) netBanner.classList.toggle('show', show);
+}
 function coopShowCode(code){ const el = coopEl('coop-code-display'); if (el) el.textContent = code ? ('房间号：' + code) : ''; }
 function coopHideOverlay(){ const el = coopEl('coop-overlay'); if (el) el.classList.remove('show'); }
 
@@ -3038,39 +3061,51 @@ function coopHandleMsg(msg){
   if (msg.type === 'room' && msg.action === 'created'){
     coopRoomCode = msg.code; coopShowCode(msg.code);
     coopSetStatus('房间已创建，等待玩家2加入…');
+    coopBanner('房间 ' + msg.code + '：等待玩家2加入…');
   } else if (msg.type === 'room' && msg.action === 'joined'){
     coopSetStatus('已加入房间，等待房主开始…');
+    coopBanner('已加入房间，等待房主开始…');
   } else if (msg.type === 'error'){
     if (msg.code === 'ROOM_NOT_FOUND') coopSetStatus('房间不存在，请检查房间号');
     else if (msg.code === 'ROOM_FULL') coopSetStatus('房间已满（仅支持 2 人）');
     else if (msg.code === 'ROOM_STARTED') coopSetStatus('房间已开始，无法加入');
     else coopSetStatus('连接错误：' + msg.code);
+    coopBanner('联机失败：' + (coopEl('coop-status') ? coopEl('coop-status').textContent : msg.code));
   } else if (msg.type === 'peer' && msg.event === 'joined'){
-    if (netMode === 'host'){ coopDropped = false; coopSetStatus('玩家2已加入！'); coopHideOverlay(); if (state !== 'playing') startGame(); }
+    if (netMode === 'host'){
+      coopDropped = false; coopSetStatus('玩家2已加入！'); coopHideOverlay();
+      coopBanner('玩家2已加入！', 2.5);
+      if (state !== 'playing') startGame();
+    }
   } else if (msg.type === 'peer' && msg.event === 'dropped'){
     if (netMode === 'off') return;   // 主动关闭不视为掉线
     coopDropped = true;
     if (netMode === 'host') keys2 = {};   // 客方掉线：停止驱动玩家2，避免漂移
     coopSetStatus(netMode === 'host' ? '玩家2掉线，等待其重连…' : '房主掉线，等待其重连…');
+    coopBanner(netMode === 'host' ? '玩家2掉线，等待重连…' : '房主掉线，等待重连…');
   } else if (msg.type === 'peer' && msg.event === 'rejoined'){
     coopDropped = false;
     coopSetStatus(netMode === 'host' ? '玩家2已重连，继续！' : '房主已重连，继续！');
+    coopBanner(netMode === 'host' ? '玩家2已重连' : '已重连，继续！', 2.5);
     // 房主立即补一帧快照，让回来的客方对齐到当前战局
     if (netMode === 'host' && typeof Net !== 'undefined') Net.send({ type:'state', snap: serializeSnapshot() });
     if (netMode === 'guest') coopReady = true;
   } else if (msg.type === 'peer' && msg.event === 'left'){
     coopDropped = false;
     coopSetStatus(netMode === 'host' ? '玩家2已离开' : '房主已离开');
+    coopBanner(netMode === 'host' ? '玩家2已离开' : '房主已离开', 5);
   } else if (msg.type === 'net'){
     // 自身连接状态（由 net.js 的重连机制上报）
-    if (msg.event === 'offline'){ coopDropped = true; coopSetStatus('连接断开，正在重连…'); }
-    else if (msg.event === 'reconnecting'){ coopSetStatus('正在重连…（第 ' + msg.attempt + ' 次）'); }
+    if (msg.event === 'offline'){ coopDropped = true; coopSetStatus('连接断开，正在重连…'); coopBanner('连接断开，正在重连…'); }
+    else if (msg.event === 'reconnecting'){ coopSetStatus('正在重连…（第 ' + msg.attempt + ' 次）'); coopBanner('正在重连…（第 ' + msg.attempt + ' 次）'); }
     else if (msg.event === 'reconnected'){
       coopDropped = false;
       coopSetStatus(netMode === 'host' ? '已重连，等待玩家2回来…' : '已重连');
+      coopBanner(netMode === 'host' ? '已重连，等待玩家2回来…' : '已重连', 2.5);
     } else if (msg.event === 'reconnect_failed'){
       coopDropped = true;
       coopSetStatus('重连失败，请重新创建或加入房间');
+      coopBanner('重连失败：请返回标题后重新创建 / 加入房间');
     }
   } else if (msg.type === 'pause'){
     /* 暂停同步（房主权威）：
@@ -3086,7 +3121,12 @@ function coopHandleMsg(msg){
     else if (msg.act === 'next' && state === 'clear') nextLevel();
     else if (state !== 'playing') startGame();
   } else if (msg.type === 'state'){
-    if (netMode === 'guest'){ applySnapshot(msg.snap); coopReady = true; coopHideOverlay(); }
+    if (netMode === 'guest'){
+      applySnapshot(msg.snap); coopReady = true; coopHideOverlay();
+      // 快照正常到达说明对局在跑：清掉「等待房主 / 重连中」的横幅。
+      // 掉线状态下不清，避免残留快照把「房主掉线」的提示顶掉。
+      if (!coopDropped) coopBanner('');
+    }
   } else if (msg.type === 'input'){
     if (netMode === 'host'){
       keys2 = unpackInput(msg.k);
@@ -3103,6 +3143,7 @@ function coopHandleMsg(msg){
 function coopReset(){
   netMode = 'off'; player2 = null; lives2 = 2; coopReady = false; coopDropped = false; coopRoomCode = '';
   keys2 = {};
+  coopBanner('');                 // 主动断开：收掉联机横幅
   if (typeof Net !== 'undefined') Net.disconnect();
 }
 
@@ -3587,6 +3628,7 @@ function loop(now){
   syncBgm();          // 按状态切换背景音乐（无 AudioContext / 关掉音乐时为空操作）
   syncStartBtn();
   syncCenterActions();
+  applyBanner();      // 联机横幅按 ttl 自动过期（内容不变时零 DOM 开销）
   requestAnimationFrame(loop);
 }
 

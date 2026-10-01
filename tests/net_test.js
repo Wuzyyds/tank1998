@@ -588,6 +588,37 @@ function unit() {
   const hasTurret = iconCalls.some(c => c[4] === '#8A6200' && c[0] === 17 && c[1] === 17 && c[2] === 4 && c[3] === 4);
   const hasHull   = iconCalls.some(c => c[4] === '#F5C518' && c[0] === 13 && c[1] === 15 && c[2] === 12 && c[3] === 9);
   assert('生命图标：包含炮管 + 炮塔 + 车体，明确是坦克而非老鹰脸', hasBarrel && hasTurret && hasHull, JSON.stringify({barrel:hasBarrel,turret:hasTurret,hull:hasHull}));
+
+  /* ---- 联机状态横幅 ----
+   * 掉线 / 重连 / 等待房主这类状态原先只写进联机弹窗的 #coop-status，而弹窗在
+   * 开局后就被关掉了：手机端客方画面是纯快照驱动的，房主一掉线画面立即冻住，
+   * 却没有任何可见提示 —— 表现就是「卡死了、摇杆也没反应」。这条横幅必须留在画面上。 */
+  const banner = vm.runInContext(`(function(){
+    var el = document.getElementById('net-banner');
+    var out = {};
+    netMode = 'guest';
+    coopHandleMsg({ type:'peer', event:'dropped' });
+    out.dropped = el.textContent;
+    coopDropped = false;
+    coopHandleMsg({ type:'state', snap: serializeSnapshot() });   // 快照正常到达 → 清横幅
+    out.cleared = el.textContent;
+    coopHandleMsg({ type:'net', event:'reconnecting', attempt: 3 });
+    out.reconnecting = el.textContent;
+    coopHandleMsg({ type:'net', event:'reconnect_failed' });
+    out.failed = el.textContent;
+    coopHandleMsg({ type:'room', action:'joined' });
+    out.waiting = el.textContent;
+    coopReset();
+    out.afterReset = el.textContent;
+    return out;
+  })()`, context);
+  assert('联机横幅：房主掉线时画面可见（不再只写在已关闭的弹窗里）',
+    /房主掉线/.test(banner.dropped), JSON.stringify(banner.dropped));
+  assert('联机横幅：快照正常到达后自动清除', banner.cleared === '', JSON.stringify(banner.cleared));
+  assert('联机横幅：等待房主 / 重连中 / 重连失败均有文案',
+    /等待房主/.test(banner.waiting) && /正在重连/.test(banner.reconnecting) && /重连失败/.test(banner.failed),
+    JSON.stringify({ waiting: banner.waiting, reconnecting: banner.reconnecting, failed: banner.failed }));
+  assert('联机横幅：主动断开后清空', banner.afterReset === '', JSON.stringify(banner.afterReset));
 }
 
 /* ---------- 单元：net.js 重连状态机（用假 WebSocket + 可控定时器） ---------- */

@@ -53,6 +53,10 @@
   <span class="hud-i wpn p2"><i>武2</i><b id="hud-weapon2">—</b></span>
   <span class="hud-i"><i>敌</i><b id="hud-enemy">20</b></span>
 </div>
+<!-- 联机状态横幅：掉线 / 重连 / 等待房主这类关键状态原先只写在联机弹窗里，
+     而弹窗开局后就被关闭，手机端于是完全看不到提示。客方画面靠房主快照驱动，
+     房主一掉线画面立刻冻住 —— 没有横幅时表现就像「游戏卡死、摇杆也没反应」。 -->
+<div id="net-banner" role="status" aria-live="polite"></div>
 <div id="touchpad" data-page-node-id="FA3nSc6AfkJk2CqukGGs68">
   <div id="joystick" data-page-node-id="joyBase">
     <span class="arrow a-up">▲</span>

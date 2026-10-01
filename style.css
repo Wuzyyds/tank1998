@@ -42,6 +42,19 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
 }
 #touchpad { position:absolute; inset:0; display:none; pointer-events:none; }
 @media (pointer:coarse){ #touchpad { display:block; } }
+/* 联机状态横幅：压在游戏区顶部，深色底 + 金色高对比文字。
+ * 手机端客方在「等待房主 / 房主掉线 / 重连中」时全靠它判断处境，
+ * 否则画面静止会被误认为卡死。pointer-events:none 不挡操作。 */
+#net-banner { position:absolute; left:50%; top:8px; transform:translateX(-50%);
+  max-width:92%; padding:6px 14px; border-radius:999px; display:none;
+  background:rgba(13,17,23,.88); border:1px solid rgba(240,192,64,.6);
+  color:#FFD866; font-size:13px; line-height:1.4; text-align:center;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  box-shadow:0 3px 14px rgba(0,0,0,.55); pointer-events:none; z-index:9; }
+#net-banner.show { display:block; }
+@media (pointer:coarse){
+  #net-banner { top:6px; font-size:14px; padding:7px 16px; }
+}
 .tbtn { position:absolute; pointer-events:auto; user-select:none; touch-action:none;
   display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
 /* 左下角虚拟摇杆：固定底盘 + 可拖动摇杆头，方向落定为 上/下/左/右。
