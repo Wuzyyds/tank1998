@@ -1,6 +1,8 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#0d1117; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100vh;
-  font-family:"Segoe UI","Microsoft YaHei",sans-serif; -webkit-tap-highlight-color:transparent; overflow:auto; }
+  font-family:"Segoe UI","Microsoft YaHei",sans-serif; -webkit-tap-highlight-color:transparent; overflow:auto;
+  /* 手机上手势从画面顶端下拉会触发「下拉刷新」，横滑会触发前进/后退 —— 都会打断对战 */
+  overscroll-behavior:none; }
 h1 { color:#f0c040; text-shadow:0 3px 0 #7a5200; font-size:30px; letter-spacing:8px; margin:14px 0 4px; }
 .sub { color:#8b949e; font-size:13px; margin-bottom:10px; letter-spacing:2px; text-align:center; }
 #wrap { position:relative; }
@@ -173,5 +175,28 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
   #hud .hud-i.wpn b { color:#F0C040; }
   #hud .hud-i.p2 { display:none; }
   #hud.coop .hud-i.p2 { display:inline; color:#7FD0FF; }
+}
+
+/* 画面内操作按钮：标题 / 结束 / 过关 / 暂停 的主入口。
+ * 桌面端 canvas 宽 680 而游戏区只占左侧 520，故按钮要对齐「游戏区中心」
+ * （520/2 ÷ 680 = 38.24%），而不是 #wrap 的几何中心；
+ * 触屏端右侧面板已被裁掉，游戏区正好铺满 #wrap，直接用 50%。 */
+#center-actions { position:absolute; left:38.24%; bottom:9%; transform:translateX(-50%);
+  display:none; gap:10px; z-index:8; pointer-events:none; }
+#center-actions.show { display:flex; }
+.ca-btn { pointer-events:auto; font-family:inherit; font-size:16px; font-weight:600;
+  padding:12px 22px; border-radius:12px; cursor:pointer; white-space:nowrap;
+  background:#21262d; color:#c9d1d9; border:1px solid #30363d;
+  box-shadow:0 3px 14px rgba(0,0,0,.55); -webkit-tap-highlight-color:transparent; }
+.ca-btn.primary { background:#1f6feb; border-color:#388bfd; color:#fff; }
+.ca-btn.primary:hover { background:#388bfd; }
+.ca-btn:hover { background:#30363d; }
+.ca-btn:active { transform:translateY(1px); }
+@media (pointer:coarse){
+  #center-actions { left:50%; bottom:10%; gap:12px; }
+  .ca-btn { font-size:17px; padding:14px 24px; border-radius:14px; }
+  /* 标题 / 结束 / 过关时隐藏摇杆与开火键：既避免与按钮抢位置，也减少画面噪音。
+   * 暂停时仍属 playing，摇杆保留（但此时只显示单个「继续」按钮，不会重叠）。 */
+  body.idle #touchpad { display:none; }
 }
 

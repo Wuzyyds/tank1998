@@ -3,16 +3,21 @@ const fs = require('fs');
 const vm = require('vm');
 
 const noop = () => {};
-/* 同时统计绘制指令数：用于「逐格重绘 → 精灵化」的性能回归断言 */
-const opStat = { calls: 0, fillRect: 0, drawImage: 0 };
+/* 同时统计绘制指令数：用于「逐格重绘 → 精灵化」的性能回归断言。
+ * rects 记录 fillRect 的前若干组参数，用来断言「某帧里有没有整屏填充」。 */
+const opStat = { calls: 0, fillRect: 0, drawImage: 0, fillText: 0, rects: [] };
 const ctxStub = new Proxy({}, {
   get(t, p){
     if (p === '__opStat') return opStat;
     if (p in t) return t[p];
     return function (){
       opStat.calls++;
-      if (p === 'fillRect') opStat.fillRect++;
+      if (p === 'fillRect'){
+        opStat.fillRect++;
+        if (opStat.rects.length < 512) opStat.rects.push([arguments[0], arguments[1], arguments[2], arguments[3]]);
+      }
       else if (p === 'drawImage') opStat.drawImage++;
+      else if (p === 'fillText') opStat.fillText++;
     };
   },
   set(t, p, v){ t[p] = v; return true; },
@@ -566,6 +571,90 @@ assert('P2 点数只由形状/数量承载（不依赖颜色：四类标记互�
 assert('P3 兵种点带与两栖标记带不重叠（点带 14~19，两栖 22 起）',
        KIND_PIP_Y - 1 + PIP_SIZE + 2 <= AMPHIB_Y,
        'pip=' + (KIND_PIP_Y - 1) + '~' + (KIND_PIP_Y - 1 + PIP_SIZE + 2) + ' amphib=' + AMPHIB_Y);
+
+/* ---------- Q. 本轮：暂停统一入口 / 画面内按钮 / 手机流畅度 ---------- */
+/* Q1 暂停只有一个入口，幂等且可切换（联机端要复用它做同步） */
+paused = false;
+setPaused(true, false);
+const qP1 = (paused === true);
+setPaused(true, false);
+const qP2 = (paused === true);          // 重复设置同一值不应翻转
+togglePause();
+const qP3 = (paused === false);
+setPaused(false, false);
+assert('Q1 暂停统一入口：setPaused 幂等、togglePause 取反', qP1 && qP2 && qP3,
+       'on=' + qP1 + ' idem=' + qP2 + ' toggle=' + qP3);
+
+/* Q2 帧预算：高刷屏（90/120Hz）不再把渲染翻倍 */
+const qSavedState = state;
+state = 'title';   const qTitleMs = renderInterval();
+state = 'playing'; const qPlayMs = renderInterval();
+state = qSavedState;
+assert('Q2 帧预算：标题页 12fps、游玩 60fps',
+       Math.abs(qTitleMs - 1000 / 12) < 0.01 && Math.abs(qPlayMs - 1000 / 60) < 0.01,
+       'title=' + qTitleMs.toFixed(1) + 'ms play=' + qPlayMs.toFixed(1) + 'ms');
+
+/* Q3 自适应画质：持续吃力时沿 2 → 1.5 → 1 降档，且只降不升 */
+const qSavedCap = dprCap, qSavedDpr = window.devicePixelRatio, qSavedCoarse = coarsePointer;
+window.devicePixelRatio = 3; coarsePointer = true; dprCap = null; setupHiDPI();
+const qDprA = DPR;
+for (let i = 0; i < 200; i++) tuneQuality(0.05);      // 50ms/帧：明显吃力
+const qDprB = DPR;
+for (let i = 0; i < 400; i++) tuneQuality(0.05);      // 继续吃力
+const qDprC = DPR;
+for (let i = 0; i < 300; i++) tuneQuality(0.008);     // 恢复流畅：不应回弹
+const qDprD = DPR;
+dprCap = qSavedCap; window.devicePixelRatio = qSavedDpr; coarsePointer = qSavedCoarse; setupHiDPI();
+assert('Q3 自适应画质：吃力时 DPR 逐档降（2→1.5→1），流畅后保持',
+       qDprA === 2 && qDprB === 1.5 && qDprC === 1 && qDprD === 1,
+       qDprA + ' → ' + qDprB + ' → ' + qDprC + ' → ' + qDprD);
+
+/* Q4 画面内按钮：每个状态只显示该出现的按钮 */
+function qDisp(id){ const el = document.getElementById(id); return (el && el.style) ? el.style.display : '?'; }
+function qSync(st, pz){ state = st; paused = !!pz; caStateKey = ''; syncCenterActions(); }
+qSync('title', false);
+const qA1 = qDisp('ca-start'), qA2 = qDisp('ca-restart');
+qSync('over', false);
+const qB1 = qDisp('ca-start'), qB2 = qDisp('ca-restart'), qB3 = qDisp('ca-title');
+qSync('playing', true);
+const qC1 = qDisp('ca-resume'), qC2 = qDisp('ca-restart');
+qSync('playing', false);
+const qD1 = qDisp('ca-start'), qD2 = qDisp('ca-resume');
+assert('Q4 画面内按钮按状态切换（标题/结束/暂停/游玩各自只显示该显示的）',
+       qA1 === '' && qA2 === 'none' &&
+       qB1 === 'none' && qB2 === '' && qB3 === '' &&
+       qC1 === '' && qC2 === 'none' &&
+       qD1 === 'none' && qD2 === 'none',
+       'title[' + qA1 + '|' + qA2 + '] over[' + qB1 + '|' + qB2 + '|' + qB3 +
+       '] pause[' + qC1 + '|' + qC2 + '] play[' + qD1 + '|' + qD2 + ']');
+
+/* Q5 覆盖层文字做成精灵后按内容缓存：静态界面每帧零 fillText */
+overlayCache = null;
+__opStat.fillText = 0;
+const qLines = [{ text:'GAME OVER', size:'bold 52px sans-serif', color:'#FF5B5B', gap:76 },
+                { text:'得分 1234', size:'20px sans-serif', color:'#FFFFFF', gap:40 }];
+overlayText(qLines, 175);
+const qFt1 = __opStat.fillText;
+__opStat.fillText = 0;
+overlayText(qLines, 175);
+const qFt2 = __opStat.fillText;
+__opStat.fillText = 0;
+overlayText([{ text:'内容变了', size:'18px sans-serif', color:'#fff', gap:30 }], 175);
+const qFt3 = __opStat.fillText;
+assert('Q5 覆盖层文字缓存：内容不变时零 fillText，内容变化后重新烘焙',
+       qFt1 === 2 && qFt2 === 0 && qFt3 === 1,
+       'first=' + qFt1 + ' cached=' + qFt2 + ' changed=' + qFt3);
+
+/* Q6 黑底并入地形缓存：地形无变化的一帧里不再有整屏填充 */
+state = 'playing'; paused = false; levelIntro = 0; hintT = 0;
+coarsePointer = true;                                  // 跳过 canvas 右侧面板的绘制
+terrainFull = false; terrainDirty = Object.create(null); terrainDirtyCount = 0;
+__opStat.rects.length = 0; __opStat.fillRect = 0;
+render();
+const qFullBg = __opStat.rects.some(r => r[0] === 0 && r[1] === 0 && r[2] === PLAY_W && r[3] === PLAY_H);
+coarsePointer = qSavedCoarse;
+assert('Q6 地形无变化的一帧里没有整屏背景填充（黑底已并入地形缓存）',
+       !qFullBg, 'fillRect=' + __opStat.fillRect + ' rects=' + JSON.stringify(__opStat.rects.slice(0, 8)));
 `;
 
 let err = null;

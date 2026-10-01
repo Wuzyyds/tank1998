@@ -206,9 +206,26 @@ async function integration() {
     // 页面结构：设置面板（分项音量）与手机端 HUD 的武器栏必须存在，否则静默失效
     const html = await (await fetch('http://127.0.0.1:' + PORT + '/')).text();
     const need = ['id="set-panel"', 'id="btn-set"', 'id="vol-master"', 'id="vol-sfx"', 'id="vol-music"', 'id="chk-bgm"', 'id="hud-weapon"',
-                  'id="relay-url"', 'id="btn-relay"', 'id="relay-now"', 'id="coop-lan"'];
+                  'id="relay-url"', 'id="btn-relay"', 'id="relay-now"', 'id="coop-lan"',
+                  'id="center-actions"', 'id="ca-start"', 'id="ca-restart"', 'id="ca-resume"', 'id="ca-next"', 'id="ca-title"'];
     const missing = need.filter(s => html.indexOf(s) < 0);
-    assert('index.html 含设置面板 / HUD 武器栏 / 中继面板（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
+    assert('index.html 含设置面板 / HUD 武器栏 / 中继面板 / 画面内按钮（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
+
+    /* 暂停同步：pause 与 start 都走同一条中继通路（服务器是纯透传，不解析类型）。
+     * 两个方向都要验证——房主广播下行、客方请求上行。 */
+    send(H, { type: 'pause', v: 1 });
+    const pauseH2G = await waitMsg(G, m => m.type === 'pause');
+    assert('暂停消息经中继送达客方（房主广播下行）',
+      !!pauseH2G && pauseH2G.v === 1 && pauseH2G.from === 'host', JSON.stringify(pauseH2G));
+    send(G, { type: 'pause', v: 1 });
+    const pauseG2H = await waitMsg(H, m => m.type === 'pause');
+    assert('客方的暂停请求经中继送达房主（客方发起上行）',
+      !!pauseG2H && pauseG2H.v === 1 && pauseG2H.from === 'guest', JSON.stringify(pauseG2H));
+
+    // 客方点画面内按钮的「开始 / 重新开始 / 下一关」：请求交给房主执行
+    send(G, { type: 'start', act: 'restart' });
+    const startRelay = await waitMsg(H, m => m.type === 'start' && m.act === 'restart');
+    assert('客方的开局请求经中继送达房主（start 通路）', !!startRelay, JSON.stringify(startRelay));
 
     // 掉线通知：关闭客方，房主应收到 peer.dropped
     const dropP = waitMsg(H, m => m.type === 'peer' && m.event === 'dropped', 3000);
@@ -265,6 +282,24 @@ function staticChecks() {
     report[f] = dup;
   }
   assert('server.js / game.js 无顶层重名函数（重名会被静默覆盖）', clean, JSON.stringify(report));
+
+  /* 消息类型白名单：server.js 的转发是显式列举 type 的，game.js 新增一种消息
+   * 却忘了登记，症状是「本机自测全对、联机完全无效」——极难被发现。这里静态比对。 */
+  const gjSrc = fs.readFileSync(path.join(ROOT, 'game.js'), 'utf8');
+  const svSrc = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+  const used = new Set();
+  const reSend = /Net\.send\(\{\s*type\s*:\s*'([a-z]+)'/g;
+  let ms;
+  while ((ms = reSend.exec(gjSrc))) used.add(ms[1]);
+  const wlLine = (svSrc.match(/type === 'input'[^\n]*/) || [''])[0];
+  const notRelayed = [];
+  for (const t of used) {
+    if (t === 'room' || t === 'ping') continue;   // 控制类消息由 server 自己消费，不进转发白名单
+    if (wlLine.indexOf("'" + t + "'") < 0) notRelayed.push(t);
+  }
+  assert('game.js 发送的消息类型都已在 server.js 转发白名单中（防静默丢弃）',
+    notRelayed.length === 0,
+    'missing=' + notRelayed.join(',') + ' | used=' + Array.from(used).join(','));
 }
 
 /* ---------- CLI 配置校验 ----------
@@ -378,6 +413,17 @@ function unit() {
   const round = vm.runInContext("(function(){ var s = serializeSnapshot(); var before = {p2: !!s.p2, lives2: s.lives2}; applySnapshot(s); return {before: before, after: {p2: !!player2, lives2: lives2}}; })()", context);
   assert('快照含 player2 且 applySnapshot 还原 player2', round.before.p2 && round.after.p2, JSON.stringify(round));
   assert('快照往返保留 lives2', round.before.lives2 === 2 && round.after.lives2 === 2, JSON.stringify(round));
+
+  /* 暂停同步：暂停标记必须进快照，作为 pause 消息丢包时的兜底；
+   * 客方 applySnapshot 时要「跟随但不再回广播」，否则两边会互相回环。 */
+  const pz = vm.runInContext("(function(){" +
+    "setPaused(false,false); var off = serializeSnapshot().pz;" +
+    "setPaused(true,false);  var on  = serializeSnapshot().pz;" +
+    "netMode='guest'; applySnapshot(serializeSnapshot()); var follow = paused;" +
+    "netMode='host'; setPaused(false,false); return {off:off, on:on, follow:follow};" +
+  "})()", context);
+  assert('暂停标记进快照（pz），客方应用后跟随暂停',
+    pz.off === 0 && pz.on === 1 && pz.follow === true, JSON.stringify(pz));
 
   // 输入打包对称
   const packSym = vm.runInContext("(function(){ var k = {ArrowUp:true, Space:true}; var b = packInput(k); var u = unpackInput(b); return u.ArrowUp === true && u.Space === true && u.ArrowDown === false; })()", context);

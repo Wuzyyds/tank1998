@@ -376,8 +376,11 @@ function dispatch(socket, msg){
     else if (type === 'room' && msg.action === 'leave'){
       leaveRoom(socket);
     }
-    else if (type === 'input' || type === 'state'){
-      // 纯中继：原样转发给房间内另一方，并打 from 标签
+    /* 纯中继：原样转发给房间内另一方，并打 from 标签。
+     * 注意这里是**显式白名单**：新加的游戏消息类型必须同时登记在此，
+     * 否则会在服务端被静默丢弃 —— 表现为「本机看着正常、联机完全无效」。
+     * input/state 是每帧流；pause/start 是低频控制消息，走同一条通路。 */
+    else if (type === 'input' || type === 'state' || type === 'pause' || type === 'start'){
       const room = socket.room ? rooms.get(socket.room) : null;
       if (!room) return;
       const out = Object.assign({}, msg, { from: socket.role });

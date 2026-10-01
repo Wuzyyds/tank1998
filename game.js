@@ -186,7 +186,10 @@ function flushTerrain(){
   const swap = ctx; ctx = terrainCtx;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   if (terrainFull){
-    ctx.clearRect(0, 0, PLAY_W, PLAY_H);
+    /* 背景色并入缓存：非地形格（空地 / 水 / 树 / 基地）在这里一次性刷黑，
+     * render() 里就省掉每帧一次全屏 fillRect —— DPR2 下相当于每帧少填 140 万像素。
+     * 前提是缓存永远保持「不透明」，所以下面的脏区重绘也用刷黑而不是 clearRect。 */
+    px(0, 0, PLAY_W, PLAY_H, '#000');
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
       if (isTerrainCacheable(map[r][c])) paintTerrainCell(r, c);
     }
@@ -196,8 +199,8 @@ function flushTerrain(){
     for (const k in terrainDirty) keys.push(k);
     for (const key of keys){
       const p = key.split(','), r = +p[0], c = +p[1];
-      // 外扩一圈：老鹰占 2x2、相邻格描边可能压到本格
-      ctx.clearRect((c-1)*TILE, (r-1)*TILE, TILE*3, TILE*3);
+      // 外扩一圈：老鹰占 2x2、相邻格描边可能压到本格。同样刷黑而非清空（保持不透明）
+      px((c-1)*TILE, (r-1)*TILE, TILE*3, TILE*3, '#000');
       for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++){
         const rr = r + dr, cc = c + dc;
         if (rr < 0 || cc < 0 || rr >= ROWS || cc >= COLS) continue;
@@ -222,6 +225,7 @@ let tileSprites = null;      // { tree, water:[相位0, 相位1] }
 let eagleSprite = null;      // 40x40：金色底座 + 像素老鹰（基地）
 let eagleItemSprite = null;  // 20x20：老鹰道具图标
 let bulletSprites = null;    // { 'gun:power' -> 16x20 弹体精灵 }
+let overlayCache = null;     // { key, sprite }：标题/结束界面的静态文字烘焙缓存
 function makeSprite(w, h, paint){
   const cv = document.createElement('canvas');
   cv.width  = Math.max(1, Math.round(w * DPR));
@@ -270,15 +274,17 @@ function syncCoarsePointer(){
  * （每帧 320 万像素的填充率），而像素风在 2x 下已看不出差别，故触屏封顶 2x。 */
 const DPR_MAX_DESKTOP = 3, DPR_MAX_TOUCH = 2;
 let DPR = 1;
+let dprCap = null;   // 自适应画质降级后的实际上限（见 tuneQuality），null = 用设备默认上限
 function setupHiDPI(){
   const raw = Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
-  const dpr = Math.min(coarsePointer ? DPR_MAX_TOUCH : DPR_MAX_DESKTOP, raw);
+  const dpr = Math.min(dprCap || (coarsePointer ? DPR_MAX_TOUCH : DPR_MAX_DESKTOP), raw);
   DPR = dpr;
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
   initTerrain();                        // DPR 变化后地形缓存需按新分辨率重建
   tileSprites = null; eagleSprite = null; eagleItemSprite = null;   // 精灵同理：按新 DPR 重新烘焙
   bulletSprites = null;
+  overlayCache = null;
 }
 syncCoarsePointer();
 setupHiDPI();
@@ -799,6 +805,7 @@ let player2 = null;         // 玩家2 坦克
 let lives2 = 2;             // 玩家2 独立命数
 let netMode = 'off';        // 'off' | 'host' | 'guest'
 let netSendAcc = 0;         // 网络发包节流累加器（20Hz）
+let pauseBeat  = 0;         // 暂停心跳累加器：暂停期间不发快照，改用 4Hz 轻量心跳维持状态同步
 let coopReady = false;      // 客方是否已收到首帧快照
 let coopDropped = false;    // 对方掉线（重连窗口内）
 let coopRoomCode = '';
@@ -1770,6 +1777,7 @@ function startLevel(fresh){
   }
   refreshFields();
   state = 'playing';
+  if (paused) setPaused(false, true);   // 开局即解除暂停（并把「继续」同步给客方）
 }
 
 function startGame(){
@@ -2437,9 +2445,11 @@ function drawExplosion(ex){
 
 function render(){
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // 高分屏：统一缩放坐标系
-  px(0, 0, PLAY_W, PLAY_H, '#000');
+  /* 背景黑底已并入地形缓存（见 flushTerrain）：这里只提交一次全屏 drawImage。
+   * 缓存不可用时（无 2D 上下文的环境）才补一次黑底兜底。 */
   flushTerrain();                                          // 地形缓存：无变化时零开销
   if (terrainCanvas) ctx.drawImage(terrainCanvas, 0, 0, PLAY_W, PLAY_H);
+  else px(0, 0, PLAY_W, PLAY_H, '#000');
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
     if (map[r][c] === WATER) drawWater(c*TILE, r*TILE);     // 水有波纹动画，不进缓存
   }
@@ -2676,49 +2686,71 @@ function syncHud(){
   hudEl.classList.toggle('coop', netMode !== 'off' || !!player2);
 }
 
-function overlayText(lines, big){
+/* 覆盖层文字：先画半透明黑幕，再逐行居中描字。
+ * 逐行累加 y：gap 表示「本行到下一行」的间距。
+ * 旧写法 190 + i*gap 会让 gap 较小的后一行反向上移，出现行与行重叠（GAME OVER 的得分被提示覆盖）。 */
+function paintOverlayText(lines, topY){
   px(0, 0, PLAY_W, PLAY_H, 'rgba(0,0,0,0.72)');
   ctx.textAlign = 'center';
-  /* 逐行累加 y：gap 表示「本行到下一行」的间距。
-   * 旧写法 190 + i*gap 会让 gap 较小的后一行反向上移，出现行与行重叠（GAME OVER 的得分被提示覆盖）。 */
-  let y = 190;
-  lines.forEach(ln => {
+  let y = topY;
+  for (const ln of lines){
     ctx.fillStyle = ln.color || '#FFFFFF';
     ctx.font = ln.size || '26px "Microsoft YaHei",sans-serif';
     ctx.fillText(ln.text, PLAY_W/2, y);
     y += (ln.gap || 46);
-  });
+  }
   ctx.textAlign = 'left';
 }
+/* 标题 / 结束 / 过关三块界面是**静态**的，却每帧都要把 8~9 行中文重新光栅化一遍，
+ * 这在手机上并不便宜。改为把整屏画到离屏精灵，内容不变时每帧只需一次 drawImage。
+ * key 由文字内容拼成：切血量档位或分数变化会自动重新烘焙。 */
+function overlayText(lines, topY){
+  if (topY === undefined) topY = 190;
+  let key = String(topY);
+  for (const ln of lines) key += '|' + ln.text + '\u0001' + ln.size + '\u0001' + ln.color + '\u0001' + ln.gap;
+  if (overlayCache && overlayCache.key === key){
+    ctx.drawImage(overlayCache.sprite, 0, 0, PLAY_W, PLAY_H);
+    return;
+  }
+  const sprite = makeSprite(PLAY_W, PLAY_H, () => paintOverlayText(lines, topY));
+  if (sprite){
+    overlayCache = { key: key, sprite: sprite };
+    ctx.drawImage(sprite, 0, 0, PLAY_W, PLAY_H);
+  } else {
+    paintOverlayText(lines, topY);      // 回退：无 2D 上下文的环境（测试沙箱）
+  }
+}
+/* 标题 / 结束 / 过关三块界面：底部改为实体按钮（见 syncCenterActions），
+ * 所以文字整体上移，给按钮腾出位置；文案也改成「点击下方按钮」。 */
 function drawTitle(){
   overlayText([
-    { text:'坦 克 大 战', size:'bold 54px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:70 },
-    { text:'TANK 1998 · 增强版', size:'18px sans-serif', color:'#A9B4C0', gap:30 },
-    { text:'保卫基地，消灭所有敌军', size:'16px sans-serif', color:'#C9D1D9', gap:40 },
-    { text:'红色闪烁敌人击杀必掉道具', size:'15px sans-serif', color:'#FF6B6B', gap:26 },
-    { text:'武器字母：F火焰 C冷冻 L激光 S散弹 H追踪 T电磁 D穿甲钻', size:'13px sans-serif', color:'#A9B4C0', gap:38 },
-    { text:'初始 2 条命 · 每 2000 分奖一命 · Lv2/Lv3 火力可挡一次子弹', size:'13px sans-serif', color:'#98A2AD', gap:30 },
-    { text:'点按屏幕 或 按 Enter 开始游戏', size:'20px sans-serif', color:'#7FD0FF', gap:40 },
-    { text:'方向键/摇杆移动 · 空格/开火键射击', size:'13px sans-serif', color:'#98A2AD', gap:26 },
+    { text:'坦 克 大 战', size:'bold 54px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:62 },
+    { text:'TANK 1998 · 增强版', size:'18px sans-serif', color:'#A9B4C0', gap:26 },
+    { text:'保卫基地，消灭所有敌军', size:'16px sans-serif', color:'#C9D1D9', gap:34 },
+    { text:'红色闪烁敌人击杀必掉道具', size:'15px sans-serif', color:'#FF6B6B', gap:24 },
+    { text:'武器字母：F火焰 C冷冻 L激光 S散弹 H追踪 T电磁 D穿甲钻', size:'13px sans-serif', color:'#A9B4C0', gap:32 },
+    { text:'初始 2 条命 · 每 2000 分奖一命 · Lv2/Lv3 火力可挡一次子弹', size:'13px sans-serif', color:'#98A2AD', gap:26 },
+    { text:'方向键/摇杆移动 · 空格/开火键射击', size:'13px sans-serif', color:'#98A2AD', gap:24 },
     { text:'H 键切换血量档位：' + PLAYER_HP_MODES.map((m, i) =>
         (i === hpMode ? '【' + m.label + ' ' + m.hp + '血】' : m.label + ' ' + m.hp + '血')).join('  '),
-      size:'13px sans-serif', color:'#46B455', gap:28 },
-  ]);
+      size:'13px sans-serif', color:'#46B455', gap:22 },
+    { text:'点击下方按钮 或 按 Enter 开始游戏', size:'15px sans-serif', color:'#7FD0FF', gap:30 },
+  ], 150);
 }
 function drawOver(){
   overlayText([
-    { text:'GAME OVER', size:'bold 52px sans-serif', color:'#FF5B5B', gap:80 },
-    { text: overReason, size:'22px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:50 },
-    { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:44 },
-    { text:'点按屏幕 或 按 Enter 重新开始', size:'16px sans-serif', color:'#7FD0FF', gap:30 },
-  ]);
+    { text:'GAME OVER', size:'bold 52px sans-serif', color:'#FF5B5B', gap:76 },
+    { text: overReason, size:'22px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:46 },
+    { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:40 },
+    { text:'点击下方按钮 或 按 Enter 重新开始', size:'15px sans-serif', color:'#7FD0FF', gap:30 },
+  ], 175);
 }
 function drawClear(){
   overlayText([
     { text:'关卡 ' + level + ' 完成!', size:'bold 44px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:70 },
     { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:50 },
-    { text:'点按屏幕 或 按 Enter 进入下一关', size:'16px sans-serif', color:'#7FD0FF', gap:30 },
-  ]);
+    { text:'点击下方按钮 或 按 Enter 进入下一关', size:'15px sans-serif', color:'#7FD0FF', gap:30 },
+  ], 190);
 }
 /* 事件提示：敌军增援 / 手雷警示 / 获得武器 */
 function drawHint(){
@@ -2828,6 +2860,7 @@ function serializeSnapshot(){
     seq: ++snapSeq,
     s: state, lvl: level, score: score, lives: lives, lives2: lives2,
     fe: freezeEnemies, fp: freezePlayer, pe: playerEagle, li: levelIntro, base: baseAlive ? 1 : 0,
+    pz: paused ? 1 : 0,   // 暂停状态兜底：pause 消息丢包时，恢复正常发快照的第一帧即可纠偏
     p: tankArr(player),
     p2: tankArr(player2),
     e: enemies.filter(en => !en.dead).map(tankArr),
@@ -2854,6 +2887,7 @@ function applySnapshot(s){
   nextExtraLifeScore = (Math.floor(score / 2000) + 1) * 2000;
   freezeEnemies = s.fe; freezePlayer = s.fp; playerEagle = s.pe; levelIntro = s.li;
   baseAlive = (s.base === 1 || s.base === true);
+  if (typeof s.pz === 'number') setPaused(s.pz === 1, false);   // 被动跟随，不回广播
   if (s.m){                               // 全量地图
     map = s.m.map(r => r.slice());
     terrainFull = true;
@@ -2937,6 +2971,18 @@ function coopHandleMsg(msg){
       coopDropped = true;
       coopSetStatus('重连失败，请重新创建或加入房间');
     }
+  } else if (msg.type === 'pause'){
+    /* 暂停同步（房主权威）：
+     *   - 客方按暂停 → 只发请求；房主收到后设置自身状态，并原样广播回去
+     *   - 客方收到房主的广播 → 只跟随，绝不回广播（否则两边互相回环）
+     * 暂停期间房主不发快照，所以另有 4Hz 的 pause 心跳兜住丢包。 */
+    setPaused(msg.v === 1, netMode === 'host');
+  } else if (msg.type === 'start'){
+    /* 客方点了「开始 / 重新开始 / 下一关」：由房主真正执行，客方跟着快照走 */
+    if (netMode !== 'host') return;
+    setPaused(false, true);
+    if (msg.act === 'next' && state === 'clear') nextLevel();
+    else if (state !== 'playing') startGame();
   } else if (msg.type === 'state'){
     if (netMode === 'guest'){ applySnapshot(msg.snap); coopReady = true; coopHideOverlay(); }
   } else if (msg.type === 'input'){
@@ -3043,11 +3089,19 @@ function setKey(code, val){
 }
 
 /* 统一的“开始 / 重新开始 / 下一关”入口。
- * 键盘 Enter、点按画布、工具栏按钮三条路径共用，手机端无需键盘即可开局。 */
+ * 键盘 Enter、点按画布、工具栏按钮、画面内按钮四条路径共用，手机端无需键盘即可开局。
+ * 联机时场景切换由房主执行：客方的点击会变成一条请求，房主做完再经快照同步回来。 */
 function requestStart(){
-  if (netMode === 'guest') return;   // 客方不本地开局，等待房主快照
   if (state === 'playing') return;
   if (gameTime < startLockT) return;        // 结束/过关后的误触保护
+  if (netMode === 'guest'){
+    if (typeof Net !== 'undefined' && Net.isOpen()){
+      const act = (state === 'clear') ? 'next' : 'restart';
+      Net.send({ type:'start', act: act });
+      coopSetStatus(act === 'next' ? '已请求进入下一关…' : '已请求重新开始…');
+    }
+    return;                                 // 客方不本地开局，等房主快照
+  }
   if (state === 'title' || state === 'over') startGame();
   else if (state === 'clear') nextLevel();
 }
@@ -3090,6 +3144,9 @@ document.querySelectorAll('.tbtn').forEach(btn => {
 /* 虚拟摇杆：左下角固定底盘，拖动杆头落定 上/下/左/右（4 向 snap，符合坦克网格移动） */
 const joy = document.getElementById('joystick');
 const joyKnob = document.getElementById('joy-knob');
+/* 杆头位移的帧节流状态（放模块级：joyReset 归位时必须把它们一起清零，
+ * 否则挂起的那一帧会把杆头又推回旧位置） */
+let knobRaf = 0, knobX = 0, knobY = 0;
 function setJoyDir(dir){
   setKey('ArrowUp',   dir === 'up');
   setKey('ArrowDown', dir === 'down');
@@ -3098,27 +3155,44 @@ function setJoyDir(dir){
 }
 function joyReset(){
   setJoyDir(null);
+  knobX = 0; knobY = 0;   // 清零待写入的位移：挂起的那一帧会写到 0，即归位
   if (joy) joy.classList.remove('active');
   if (joyKnob) joyKnob.style.transform = 'translate(-50%,-50%)';
 }
 if (joy && joyKnob){
   const DEAD = 14, RADIUS = 46;
+  const raf = (typeof requestAnimationFrame === 'function') ? requestAnimationFrame : (fn => setTimeout(fn, 16));
   let joyId = null;
+  /* 触摸屏的 pointermove 触发频率可达 120Hz，而每次写 style.transform 之前若先
+   * getBoundingClientRect() 就会反复强制同步布局（layout thrashing）。
+   * 这里做两件事：① 底盘矩形在按下时量一次并缓存；② 杆头位移按帧节流写入。 */
+  let joyRect = null;
+  function flushKnob(){
+    knobRaf = 0;
+    joyKnob.style.transform = `translate(calc(-50% + ${knobX}px), calc(-50% + ${knobY}px))`;
+  }
+  function scheduleKnob(x, y){
+    knobX = x; knobY = y;
+    if (!knobRaf) knobRaf = raf(flushKnob);
+  }
   function joyMove(clientX, clientY){
-    const r = joy.getBoundingClientRect();
+    const r = joyRect || joy.getBoundingClientRect();
     let dx = clientX - (r.left + r.width / 2);
     let dy = clientY - (r.top + r.height / 2);
     const dist = Math.hypot(dx, dy) || 1;
     const cl = Math.min(dist, RADIUS);
     const nx = dx / dist, ny = dy / dist;
-    joyKnob.style.transform = `translate(calc(-50% + ${nx * cl}px), calc(-50% + ${ny * cl}px))`;
+    scheduleKnob(nx * cl, ny * cl);
+    // 方向判定立即生效（这是输入，不能延后一帧）
     if (dist < DEAD){ setJoyDir(null); return; }
     if (Math.abs(dx) > Math.abs(dy)) setJoyDir(dx > 0 ? 'right' : 'left');
     else setJoyDir(dy > 0 ? 'down' : 'up');
   }
   joy.addEventListener('pointerdown', e => {
     e.preventDefault(); initAudio();
-    joyId = e.pointerId; joy.setPointerCapture(e.pointerId);
+    joyId = e.pointerId;
+    joyRect = joy.getBoundingClientRect();
+    try { joy.setPointerCapture(e.pointerId); } catch (_) {}
     joy.classList.add('active'); joyMove(e.clientX, e.clientY);
   });
   joy.addEventListener('pointermove', e => {
@@ -3207,11 +3281,25 @@ if (codexOverlay){
   }
 }
 window.addEventListener('keydown', e => { if (e.key === 'Escape'){ showCodex(false); } });
-function togglePause(){
-  paused = !paused;
-  btnPause.textContent = paused ? '▶ 继续' : '⏸ 暂停';
-  btnPause.classList.toggle('on', paused);
+/* 暂停状态的唯一入口。双人下暂停是「全局」的：任一方按暂停，另一方也停。
+ * sync=true 表示本次由本机用户发起，需要把状态广播给对端（房主=权威广播，
+ * 客方=请求广播）；sync=false 用于跟随对端下发的状态，避免双方互相回广播形成回声。 */
+function setPaused(v, sync){
+  v = !!v;
+  const changed = (paused !== v);
+  paused = v;
+  if (typeof btnPause !== 'undefined' && btnPause){
+    btnPause.textContent = paused ? '▶ 继续' : '⏸ 暂停';
+    btnPause.classList.toggle('on', paused);
+  }
+  if (sync && netMode !== 'off' && typeof Net !== 'undefined' && Net.isOpen()){
+    Net.send({ type:'pause', v: paused ? 1 : 0 });
+    pauseBeat = 0;   // 刚广播过，重置心跳计时
+  }
+  if (changed) syncCenterActions();
+  return changed;
 }
+function togglePause(){ return setPaused(!paused, true); }
 function toggleReduceMotion(){ setReduceMotion(!reduceMotion); }
 function syncReduceMotionBtn(){
   if (!btnFlash) return;
@@ -3247,34 +3335,145 @@ function syncStartBtn(){
   if (btnStart.disabled !== dis) btnStart.disabled = dis;
 }
 
+/* ================= 画面内操作按钮（标题 / 结束 / 过关 / 暂停） =================
+ * 手机端没有键盘，也不能指望用户去点画面：这里把「开始 / 重新开始 / 继续 /
+ * 下一关 / 返回标题」做成画面上的实体按钮，只在对应状态出现。
+ * 用状态串缓存，避免每帧都去写 DOM。 */
+const centerActions = document.getElementById('center-actions');
+const caStart   = document.getElementById('ca-start');
+const caRestart = document.getElementById('ca-restart');
+const caResume  = document.getElementById('ca-resume');
+const caNext    = document.getElementById('ca-next');
+const caTitle   = document.getElementById('ca-title');
+let caStateKey = '';
+function caShow(el, on){ if (el && el.style) el.style.display = on ? '' : 'none'; }
+function syncCenterActions(){
+  if (!centerActions || !centerActions.classList) return;
+  const key = state + (paused ? ':p' : '') + (netMode === 'off' ? '' : ':' + netMode);
+  if (key === caStateKey) return;
+  caStateKey = key;
+  const isTitle = state === 'title', isOver = state === 'over',
+        isClear = state === 'clear', isPause = state === 'playing' && paused;
+  centerActions.classList.toggle('show', isTitle || isOver || isClear || isPause);
+  // 非游玩状态隐藏摇杆 / 开火键（触屏），按钮才有干净的位置
+  if (document.body && document.body.classList) document.body.classList.toggle('idle', state !== 'playing');
+  caShow(caStart,   isTitle);
+  caShow(caRestart, isOver);
+  caShow(caResume,  isPause);
+  caShow(caNext,    isClear);
+  caShow(caTitle,   isOver || isClear);
+}
+if (caStart)   caStart.addEventListener('click',   () => { initAudio(); requestStart(); });
+if (caRestart) caRestart.addEventListener('click', () => { initAudio(); setPaused(false, true); requestStart(); });
+if (caResume)  caResume.addEventListener('click',  () => { initAudio(); setPaused(false, true); });
+if (caNext)    caNext.addEventListener('click',    () => { initAudio(); requestStart(); });
+if (caTitle)   caTitle.addEventListener('click',   () => { initAudio(); toTitle(); });
+
+/* 返回标题：重建一张干净地图，但停在标题界面（update 只在 playing 时推进，
+ * 所以敌人与幕布都不会动）。房主切场景后补发一帧快照，客方才能跟着回标题。 */
+function toTitle(){
+  if (netMode === 'guest') return;      // 客方不自行切场景，等房主
+  score = 0; lives = 2; lives2 = 2; level = 1; nextExtraLifeScore = 2000;
+  startLevel(true);
+  state = 'title';
+  levelIntro = 0;
+  startLockT = gameTime + 0.4;          // 标题界面上的误触保护
+  if (netMode === 'host' && typeof Net !== 'undefined' && Net.isOpen()){
+    Net.send({ type:'state', snap: serializeSnapshot() });
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && state === 'playing' && !paused) togglePause();
+  if (!document.hidden) return;
+  if (netMode === 'guest'){
+    /* 客方切后台：触屏/键盘状态随之失效，必须立刻上报「全部松手」，
+     * 否则房主侧玩家2会保持最后一次输入的方向一直跑（撞墙/被围殴）。 */
+    keys2 = {};
+    if (typeof Net !== 'undefined' && Net.isOpen()) Net.send({ type:'input', k: 0, ack: applySnapshot.lastSeq });
+    return;
+  }
+  // 单机 / 房主：自动暂停（房主会把它同步给客方，双方一起停）
+  if (state === 'playing' && !paused) togglePause();
 });
 
-/* ================= 主循环 ================= */
-let last = performance.now();
+/* ================= 主循环 =================
+ * 帧预算：像素风画面 60fps 已经足够，而高刷屏（90/120Hz）会把渲染调用翻倍。
+ * 这里按状态给出帧率上限，超出的帧只推进逻辑、不提交绘制。
+ * 标题页是完全静态的画面（一屏文字），压到 12fps —— 手机上这一档省电最明显。 */
+const RENDER_FPS_TITLE = 12, RENDER_FPS_PLAY = 60;
+let last = performance.now(), lastRender = -1e9;
+
+function renderInterval(){
+  return 1000 / (state === 'title' ? RENDER_FPS_TITLE : RENDER_FPS_PLAY);
+}
+
+/* ================= 自适应画质 =================
+ * 低端机（尤其千元安卓）在 DPR2 下填充率吃不消，表现为持续掉帧。
+ * 具体做法：游玩中采样真实帧间隔（rAF 的 dt，GPU 拖着时会自然升高），
+ * 持续偏低就沿阶梯 2 → 1.5 → 1 降一档 DPR。
+ * 只降不升（像素风下 1.5x 与 2x 的观感差别很小），避免在阈值附近反复抖动。 */
+const DPR_LADDER = [2, 1.5, 1];
+const QUALITY_WINDOW = 90;      // 采样窗口（帧）：约 0.75~1.5 秒
+const QUALITY_SLOW = 0.0215;    // 平均帧间隔超过 ~21.5ms（低于 ~46fps）视为吃力
+let qualitySamples = 0, qualityAcc = 0, qualityCooldown = 0;
+function tuneQuality(dt){
+  if (state !== 'playing' || paused){ qualitySamples = 0; qualityAcc = 0; return; }
+  if (qualityCooldown > 0){ qualityCooldown -= dt; return; }
+  qualityAcc += dt;
+  qualitySamples++;
+  if (qualitySamples < QUALITY_WINDOW) return;
+  const avg = qualityAcc / qualitySamples;
+  qualitySamples = 0; qualityAcc = 0;
+  if (avg <= QUALITY_SLOW) return;
+  let next = null;
+  for (const v of DPR_LADDER){ if (v < DPR - 0.01){ next = v; break; } }
+  if (next === null) return;        // 已经降到最低档
+  dprCap = next;
+  setupHiDPI();                     // 重设画布尺寸 + 重建地形缓存 / 精灵
+  qualityCooldown = 6;              // 降档后给 6 秒稳定期，避免连环降级
+}
+
 function loop(now){
   const dt = Math.min((now - last) / 1000, 0.05);
   last = now;
   if (!paused){
     gameTime += dt;
     if (netMode !== 'guest') update(dt);   // 客方纯渲染，不模拟
-    // 网络收发（20Hz）：房主发快照，客方发输入
-    if (netMode !== 'off' && typeof Net !== 'undefined' && Net.isOpen()){
-      netSendAcc += dt;
-      if (netSendAcc >= 0.05){
-        netSendAcc = 0;
-        // 背压：上行积压时跳过一次快照，避免弱网下雪崩（输入包极小，永不跳过）
-        if (netMode === 'host' && state === 'playing' && Net.bufferedAmount() < 262144){
+  }
+  tuneQuality(dt);   // 持续掉帧时自动降一档 DPR（详见上方注释）
+  /* 网络收发（20Hz）：房主发快照，客方发输入。
+   * 这一段**不能**放进 if(!paused)：暂停期间房主不再发快照，只能靠 pause 心跳
+   * 告诉客方「一起停」；客方也要继续上报输入，否则房主侧玩家2会保持最后一次输入不放。 */
+  if (netMode !== 'off' && typeof Net !== 'undefined' && Net.isOpen()){
+    netSendAcc += dt;
+    if (netSendAcc >= 0.05){
+      netSendAcc = 0;
+      if (netMode === 'host'){
+        if (paused){
+          // 4Hz 暂停心跳：兜住 pause 消息丢包，让客方跟上暂停/继续
+          pauseBeat += 0.05;
+          if (pauseBeat >= 0.25){ pauseBeat = 0; Net.send({ type:'pause', v:1 }); }
+        } else if (state === 'playing' && Net.bufferedAmount() < 262144){
+          // 背压：上行积压时跳过一次快照，避免弱网下雪崩（输入包极小，永不跳过）
           Net.send({ type:'state', snap: serializeSnapshot() });
         }
-        else if (netMode === 'guest') Net.send({ type:'input', k: packInput(keys2), ack: applySnapshot.lastSeq });
+      } else if (netMode === 'guest'){
+        Net.send({ type:'input', k: packInput(keys2), ack: applySnapshot.lastSeq });
+        if (paused){
+          // 客方同样重发暂停请求：房主没收到请求时，客方不会单方面停住
+          pauseBeat += 0.05;
+          if (pauseBeat >= 0.25){ pauseBeat = 0; Net.send({ type:'pause', v:1 }); }
+        }
       }
     }
   }
-  render();
+  if (now - lastRender >= renderInterval() - 1){
+    lastRender = now;
+    render();
+  }
   syncBgm();          // 按状态切换背景音乐（无 AudioContext / 关掉音乐时为空操作）
   syncStartBtn();
+  syncCenterActions();
   requestAnimationFrame(loop);
 }
 
