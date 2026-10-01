@@ -2981,7 +2981,8 @@ function coopHandleMsg(msg){
     /* 客方点了「开始 / 重新开始 / 下一关」：由房主真正执行，客方跟着快照走 */
     if (netMode !== 'host') return;
     setPaused(false, true);
-    if (msg.act === 'next' && state === 'clear') nextLevel();
+    if (msg.act === 'title') toTitle();
+    else if (msg.act === 'next' && state === 'clear') nextLevel();
     else if (state !== 'playing') startGame();
   } else if (msg.type === 'state'){
     if (netMode === 'guest'){ applySnapshot(msg.snap); coopReady = true; coopHideOverlay(); }
@@ -3367,7 +3368,18 @@ if (caStart)   caStart.addEventListener('click',   () => { initAudio(); requestS
 if (caRestart) caRestart.addEventListener('click', () => { initAudio(); setPaused(false, true); requestStart(); });
 if (caResume)  caResume.addEventListener('click',  () => { initAudio(); setPaused(false, true); });
 if (caNext)    caNext.addEventListener('click',    () => { initAudio(); requestStart(); });
-if (caTitle)   caTitle.addEventListener('click',   () => { initAudio(); toTitle(); });
+if (caTitle)   caTitle.addEventListener('click',   () => {
+  initAudio();
+  // 客方不能自行切场景：同样把「返回标题」变成一条请求交给房主
+  if (netMode === 'guest'){
+    if (typeof Net !== 'undefined' && Net.isOpen()){
+      Net.send({ type:'start', act:'title' });
+      coopSetStatus('已请求返回标题…');
+    }
+    return;
+  }
+  toTitle();
+});
 
 /* 返回标题：重建一张干净地图，但停在标题界面（update 只在 playing 时推进，
  * 所以敌人与幕布都不会动）。房主切场景后补发一帧快照，客方才能跟着回标题。 */
