@@ -10,6 +10,9 @@ _*.txt
 _*.png
 _*.js
 _*.pem
+_*.tgz
+_*.tar.gz
+_*.zip
 
 # 编辑器 / 系统
 .DS_Store
