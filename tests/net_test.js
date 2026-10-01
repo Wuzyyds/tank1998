@@ -287,6 +287,7 @@ async function cliChecks() {
   console.log('\n=== CLI：TLS / 帮助 配置校验 ===');
   const help = await runCli(['--help']);
   assert('--help 退出码 0 且打印用法', help.code === 0 && help.out.indexOf('用法') >= 0, 'code=' + help.code);
+  assert('--help 列出 --public-url（公网部署用）', help.out.indexOf('--public-url') >= 0);
 
   const half = await runCli(['--tls-cert', 'x.pem', '--port', '8123']);
   assert('只给证书不给私钥时拒绝启动（不静默降级为明文）',
@@ -297,6 +298,40 @@ async function cliChecks() {
   assert('证书文件不存在时报错并退出',
     missing.code === 1 && missing.err.indexOf('读取证书') >= 0,
     'code=' + missing.code + ' err=' + missing.err.trim());
+}
+
+/* ---------- 集成：PUBLIC_URL 覆盖 /lan 的对外地址 ----------
+ * 公网部署在反代后面时，/lan 若返回服务器内网 IP，联机面板会给访客一个
+ * 完全不可达的地址。设了 PUBLIC_URL 之后必须原样返回它（末尾斜杠归一）。 */
+function publicUrlCheck() {
+  console.log('\n=== 集成：PUBLIC_URL 覆盖 /lan 对外地址 ===');
+  const P = 8126, WANT = 'http://203.0.113.9:8000';
+  return new Promise(resolve => {
+    const srv = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+      env: Object.assign({}, process.env, { PORT: String(P), PUBLIC_URL: WANT + '/' }),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let fired = false, out = '';
+    const done = async () => {
+      if (fired) return;
+      fired = true;
+      try {
+        const r = await fetch('http://127.0.0.1:' + P + '/lan');
+        const j = await r.json();
+        assert('PUBLIC_URL 生效：/lan 返回对外地址（末尾斜杠已归一）',
+          j.url === WANT && j.public === true, JSON.stringify(j));
+      } catch (e) {
+        assert('PUBLIC_URL 生效：/lan 返回对外地址', false, e.message);
+      } finally {
+        try { srv.kill(); } catch (e) {}
+        resolve();
+      }
+    };
+    const onData = d => { out += d.toString(); if (out.indexOf('已启动') >= 0) done(); };
+    srv.stdout.on('data', onData);
+    srv.stderr.on('data', onData);
+    setTimeout(done, 1500);   // 兜底：没捕获到启动日志也继续
+  });
 }
 
 /* ---------- 单元：在 vm 沙箱中加载 game.js 测同步逻辑 ---------- */
@@ -590,6 +625,7 @@ function netUnit() {
 (async () => {
   staticChecks();
   await cliChecks();
+  await publicUrlCheck();
   await integration();
   unit();
   netUnit();

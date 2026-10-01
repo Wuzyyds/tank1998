@@ -11,6 +11,7 @@
  *   --host <addr>         绑定地址（默认 0.0.0.0）
  *   --tls-cert <pem>      TLS 证书链；与 --tls-key 同时提供时启用 https/wss
  *   --tls-key  <pem>      TLS 私钥（可用 TLS_CERT / TLS_KEY 环境变量代替）
+ *   --public-url <url>    对外访问地址，/lan 直接返回它（PUBLIC_URL 环境变量代替）
  *   --allow-origin <list> 逗号分隔的 Origin 白名单（防公网中继被盗用；留空不校验）
  *   --help                打印用法
  * ========================================================= */
@@ -39,6 +40,10 @@ const ALLOW_ORIGIN = (process.env.ALLOW_ORIGIN || argValue('--allow-origin') || 
   .split(',').map(s => s.trim()).filter(Boolean);
 const CERT_PATH = process.env.TLS_CERT || argValue('--tls-cert');
 const KEY_PATH  = process.env.TLS_KEY  || argValue('--tls-key');
+/* 对外访问地址（如 http://1.2.3.4 或 https://game.example.com）。
+ * 公网部署时内网 IP 对访客毫无意义，设了它 /lan 就直接返回这个地址，
+ * 联机面板里的「让好友打开 …」才显示得对。留空则保持局域网自动探测。 */
+const PUBLIC_URL = (process.env.PUBLIC_URL || argValue('--public-url') || '').replace(/\/+$/, '');
 
 if (HELP){
   console.log([
@@ -50,6 +55,7 @@ if (HELP){
     '  --host <addr>         绑定地址（默认 0.0.0.0）',
     '  --tls-cert <pem>      TLS 证书链，配合 --tls-key 启用 https + wss',
     '  --tls-key  <pem>      TLS 私钥（也可用 TLS_CERT / TLS_KEY 环境变量）',
+    '  --public-url <url>    对外访问地址，/lan 直接返回它（也可用 PUBLIC_URL 环境变量）',
     '  --allow-origin <list> 逗号分隔 Origin 白名单，留空则不做校验',
     '  --help, -h            显示本帮助',
     '',
@@ -143,12 +149,12 @@ function handleRequest(req, res){
     });
     return;
   }
-  // 客户端获取推荐局域网地址
+  // 客户端获取推荐联机地址：优先 PUBLIC_URL（公网部署），否则自动探测局域网 IP
   if (urlPath === '/lan'){
     const lan = pickLanIP();
     sendJsonRes(res, {
-      ip: lan.ip, port: PORT, tls: !!tlsOpts,
-      url: lan.ip ? (SCHEME + '://' + lan.ip + ':' + PORT) : null,
+      ip: lan.ip, port: PORT, tls: !!tlsOpts, public: !!PUBLIC_URL,
+      url: PUBLIC_URL || (lan.ip ? (SCHEME + '://' + lan.ip + ':' + PORT) : null),
     });
     return;
   }

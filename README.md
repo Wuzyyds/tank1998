@@ -20,7 +20,9 @@
 - **程序化 chiptune 背景音乐**（标题 / 战斗两段循环，无额外素材）+ 主音量/音效/音乐三级总线，
   等响度曲线调节、总线限幅防爆音（敌我数十门炮同响也不削波）、设置持久化
 - **公网可部署**：`server.js` 用 `--tls-cert/--tls-key` 直接提供 HTTPS + wss，
-  带 `/healthz` 存活探测、WebSocket 保活 ping、可选 Origin 白名单；
+  也可明文跑在 nginx/Caddy 后面（反代 `/ws` 即可）；
+  带 `/healthz` 存活探测、WebSocket 保活 ping、可选 Origin 白名单，
+  `/lan` 可用 `--public-url` 指定对外地址；
   页面与中继分离时可用 `?relay=` 或面板填入独立中继地址
 - PWA 可安装、离线可玩
 
@@ -132,6 +134,13 @@ node server.js --port 8080 --allow-origin https://tank.example.com
 ```
 
 > `--allow-origin`（或 `ALLOW_ORIGIN`）只放行名单内的来源，避免公网中继被其它页面白嫖；留空则不校验。
+>
+> 反代把中继挂在同一个对外地址下时，加 `--public-url http://1.2.3.4`（或 `PUBLIC_URL`）：
+> 游戏内「让好友打开 …」会显示这个对外地址，而不是服务器内网 IP（内网 IP 对访客毫无意义）。
+
+> 注意：Debian/Ubuntu 的 nginx 里 `sites-enabled/default` 有时是**普通文件**而不是指向
+> `sites-available/` 的符号链接。只改 `sites-available/` 而不改 `sites-enabled/` 等于没改，
+> 且 `nginx -t` 依然通过——配置看着没问题，实际跑的还是旧的那份。
 
 ### 方案 C：静态托管 + 独立中继
 
@@ -175,6 +184,7 @@ curl -fsS localhost:8080/healthz        # 存活探测，可接监控 / 负载�
 - [ ] 公网部署已启用 HTTPS/wss（浏览器会拒绝 HTTPS 页面连 `ws://`）
 - [ ] 防火墙放行服务端口；云主机需同步放行安全组
 - [ ] 公网场景设置了 `--allow-origin`
+- [ ] 反代部署时设置了 `--public-url`（否则面板显示的是服务器的内网 IP）
 - [ ] `curl -fsS https://你的域名/healthz` 返回 `"ok":true`
 - [ ] 两台设备实测：创建房间 → 加入 → 开局 → 断线重连
 - [ ] 手机端实测：横屏、摇杆、开火键、DOM HUD 可读
