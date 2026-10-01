@@ -2069,6 +2069,7 @@ function hitFlashRect(cx, cy, left){
 /* 血条：仅受伤后显示（armor 常驻，因为「硬」是核心信号）；
  * maxHp>=4 时按血格分段，与 1 点伤害的离散模型吻合。 */
 function drawHealthBar(t, cx, cy){
+  // 兵种点带占 cy+14~cy+19，血条在其上方，两条标记带不会相交
   if (t.maxHp <= 1) return;
   if (t.hp >= t.maxHp && t.kind !== 'armor' && t.kind !== 'boss') return;   // 首领血条常显
   const w = t.kind === 'boss' ? 32 : 16, h = 2, x = cx - w/2, y = cy - 21;
@@ -2089,6 +2090,26 @@ function drawHealthBar(t, cx, cy){
     ctx.strokeStyle = col; ctx.lineWidth = 1;
     ctx.strokeRect(x - 2.5, y - 2.5, w + 5, h + 5);
   }
+}
+
+/* ---- 兵种识别标记（色盲友好） ----
+ * 实测：6 张坦克贴图的 alpha 轮廓完全一致（各 640 个不透明像素，逐对像素差 0.0%），
+ * 也就是说「普通/快速/火力/装甲」只靠颜色区分——红绿色盲或屏幕偏色时无法分辨。
+ * 这里在坦克下方用「点数」冗余编码兵种（形状/数量承载信息，不依赖颜色）：
+ *   1 点 = 快速兵   2 点 = 火力兵   3 点 = 装甲兵
+ * 普通兵无点；道具兵已有 ★；首领已有皇冠——四类标记互斥，不会堆在一起。
+ * 用中性亮色 + 深色底托，保证在雪地/沙漠等亮地形上同样可读。 */
+const KIND_PIPS = { fast: 1, power: 2, armor: 3 };
+const PIP_SIZE = 3, PIP_GAP = 2;
+const KIND_PIP_Y = 15;    // 点带在坦克下方（精灵底边约 cy+13.5）
+const AMPHIB_Y   = 22;    // 两栖标记带，位于点带之下（点带占 14~19）
+function drawKindPips(t, cx, cy){
+  const n = KIND_PIPS[t.kind];
+  if (!n) return;
+  const total = n * PIP_SIZE + (n - 1) * PIP_GAP;
+  const x0 = cx - total / 2, y = cy + KIND_PIP_Y;
+  px(x0 - 1, y - 1, total + 2, PIP_SIZE + 2, '#0B0D10');   // 深色底托 → 亮地形上也有对比
+  for (let i = 0; i < n; i++) px(x0 + i * (PIP_SIZE + PIP_GAP), y, PIP_SIZE, PIP_SIZE, '#EDEFF2');
 }
 
 function drawTank(t){
@@ -2219,11 +2240,13 @@ function drawTank(t){
     px(cx - 9, cy - 33, 6, 2, '#D9A9FF');
     px(cx + 3, cy - 33, 6, 2, '#D9A9FF');
   }
-  // 水陆两栖标注
+  // 兵种识别标记（色盲友好）
+  drawKindPips(t, cx, cy);
+  // 水陆两栖标注（下移到兵种点下方，避免两条标记带叠在一起）
   if (t.amphibious > 0){
-    px(cx - 6, cy + 10, 12, 2, '#7FD0FF');
-    px(cx - 4, cy + 12, 3, 2, '#7FD0FF');
-    px(cx + 1, cy + 12, 3, 2, '#7FD0FF');
+    px(cx - 6, cy + AMPHIB_Y, 12, 2, '#7FD0FF');
+    px(cx - 4, cy + AMPHIB_Y + 2, 3, 2, '#7FD0FF');
+    px(cx + 1, cy + AMPHIB_Y + 2, 3, 2, '#7FD0FF');
   }
 }
 

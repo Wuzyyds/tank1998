@@ -11,7 +11,9 @@ body.fit h1, body.fit .sub, body.fit footer, body.fit .toolbar { display:none; }
 body.fit { justify-content:flex-start; }
 body.fit #wrap { margin:0; }
 body.fit canvas { width:min(100vw, calc(100vh * 680 / 520)); border-width:0; border-radius:0; }
-footer { color:#565d66; font-size:12px; margin:10px 0 6px; text-align:center; }
+/* 页脚是操作说明正文（点按/摇杆/键盘/规则），旧色 #565d66 对 #0d1117 仅 2.84:1
+ * （WCAG AA 正文下限 4.5:1），改为 #8b949e → 6.15:1 达标 */
+footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
 .toolbar { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; justify-content:center; }
 .toolbar button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:8px;
   padding:7px 14px; font-size:13px; cursor:pointer; font-family:inherit; }
@@ -40,11 +42,15 @@ footer { color:#565d66; font-size:12px; margin:10px 0 6px; text-align:center; }
 @media (pointer:coarse){ #touchpad { display:block; } }
 .tbtn { position:absolute; pointer-events:auto; user-select:none; touch-action:none;
   display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
-/* 左下角虚拟摇杆：固定底盘 + 可拖动摇杆头，方向落定为 上/下/左/右 */
+/* 左下角虚拟摇杆：固定底盘 + 可拖动摇杆头，方向落定为 上/下/左/右。
+ * 底盘必须是「深色纱罩」而不是纯白高光：摇杆压在画布上，地形可能是雪原
+ * (#E4EAF0) 或沙漠，原先的白色半透明底 + 白色箭头在该地形上对比度只有
+ * 1.26:1（几乎看不见）。改为深色纱罩 + 白色描边环，任何地形上都清晰。 */
 #joystick { position:absolute; left:4%; bottom:7%;
   width:128px; height:128px; border-radius:50%;
-  background:radial-gradient(circle at 50% 50%, rgba(255,255,255,.06), rgba(255,255,255,.12));
-  border:2px solid rgba(255,255,255,.22);
+  background:radial-gradient(circle at 50% 50%, rgba(13,17,23,.42), rgba(13,17,23,.58));
+  border:2px solid rgba(255,255,255,.42);
+  box-shadow:0 2px 10px rgba(0,0,0,.35);
   pointer-events:auto; touch-action:none; user-select:none; }
 #joy-knob { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
   width:58px; height:58px; border-radius:50%;
@@ -52,17 +58,26 @@ footer { color:#565d66; font-size:12px; margin:10px 0 6px; text-align:center; }
   border:2px solid rgba(255,255,255,.5);
   box-shadow:0 4px 10px rgba(0,0,0,.35); transition:transform .04s linear; }
 #joystick.active { border-color:rgba(240,192,64,.55); }
-#joystick .arrow { position:absolute; color:rgba(255,255,255,.5); font-size:16px; pointer-events:none; }
+/* 深色描边阴影：即使背后是亮地形，箭头边缘仍有对比（不依赖底色明亮度） */
+#joystick .arrow { position:absolute; color:rgba(255,255,255,.9); font-size:17px; pointer-events:none;
+  text-shadow:0 0 3px rgba(0,0,0,.9), 0 1px 2px rgba(0,0,0,.95); }
 #joystick .a-up    { left:50%; top:6px;  transform:translateX(-50%); }
 #joystick .a-down  { left:50%; bottom:6px; transform:translateX(-50%); }
 #joystick .a-left  { left:8px;  top:50%; transform:translateY(-50%); }
 #joystick .a-right { right:8px; top:50%; transform:translateY(-50%); }
-/* 右下角开火键：大号、拇指易触 */
+/* 右下角开火键：大号、拇指易触。
+ * 同理加一层深色纱罩：金色文字压在雪原/沙漠地形上时，原先只有约 1.4:1，
+ * 换深色底 + 文字阴影后稳定可读。 */
 #pad-fire { right:5%; bottom:9%; width:92px; height:92px; border-radius:50%;
-  background:radial-gradient(circle at 40% 36%, rgba(255,210,120,.32), rgba(240,192,64,.18));
-  border:3px solid rgba(240,192,64,.55); color:#f0c040; font-size:26px; font-weight:700;
-  letter-spacing:2px; }
-#pad-fire:active { background:radial-gradient(circle at 40% 36%, rgba(255,210,120,.55), rgba(240,192,64,.32)); }
+  background:radial-gradient(circle at 40% 36%, rgba(240,192,64,.34), rgba(240,192,64,.20)),
+             radial-gradient(circle at 50% 50%, rgba(13,17,23,.38), rgba(13,17,23,.55));
+  border:3px solid rgba(240,192,64,.75); color:#FFD866; font-size:26px; font-weight:700;
+  letter-spacing:2px;
+  text-shadow:0 0 4px rgba(0,0,0,.85), 0 1px 2px rgba(0,0,0,.9);
+  box-shadow:0 2px 10px rgba(0,0,0,.35); }
+#pad-fire:active {
+  background:radial-gradient(circle at 40% 36%, rgba(255,225,150,.55), rgba(240,192,64,.38)),
+             radial-gradient(circle at 50% 50%, rgba(13,17,23,.38), rgba(13,17,23,.55)); }
 /* 双人合作：房间弹窗 */
 .overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
   background:rgba(0,0,0,.66); z-index:50; padding:16px; }

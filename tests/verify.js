@@ -542,6 +542,30 @@ sfx.boom();
 assert('N5 同名音效节流生效（shoot 连发被吞、boom 不受限）',
        nT1 !== undefined && nT2 === nT1 && sfxLastAt.boom === undefined,
        'shoot=' + nT1 + '/' + nT2 + ' boom=' + sfxLastAt.boom);
+
+/* ---------- P. 可读性：兵种识别标记（色盲冗余） ----------
+ * 六张坦克贴图 alpha 轮廓完全一致（各 640 像素、逐对差 0.0%），
+ * 兵种原本只靠颜色区分；这里用「点数」做形状冗余。 */
+__opStat.fillRect = 0; drawKindPips({ kind:'basic' }, 0, 0);
+const pBasic = __opStat.fillRect;
+__opStat.fillRect = 0; drawKindPips({ kind:'fast' }, 0, 0);
+const pFast = __opStat.fillRect;
+__opStat.fillRect = 0; drawKindPips({ kind:'power' }, 0, 0);
+const pPower = __opStat.fillRect;
+__opStat.fillRect = 0; drawKindPips({ kind:'armor' }, 0, 0);
+const pArmor = __opStat.fillRect;
+__opStat.fillRect = 0; drawKindPips({ kind:'boss' }, 0, 0);
+const pBoss = __opStat.fillRect;
+assert('P1 兵种点数：普通/首领无点，快速1 火力2 装甲3（各含1个深色底托）',
+       pBasic === 0 && pBoss === 0 && pFast === 2 && pPower === 3 && pArmor === 4,
+       'basic=' + pBasic + ' fast=' + pFast + ' power=' + pPower + ' armor=' + pArmor + ' boss=' + pBoss);
+assert('P2 点数只由形状/数量承载（不依赖颜色：四类标记互斥、底托保证亮地形可读）',
+       KIND_PIPS.fast === 1 && KIND_PIPS.power === 2 && KIND_PIPS.armor === 3 &&
+       !('basic' in KIND_PIPS) && !('bonus' in KIND_PIPS) && !('boss' in KIND_PIPS),
+       JSON.stringify(KIND_PIPS));
+assert('P3 兵种点带与两栖标记带不重叠（点带 14~19，两栖 22 起）',
+       KIND_PIP_Y - 1 + PIP_SIZE + 2 <= AMPHIB_Y,
+       'pip=' + (KIND_PIP_Y - 1) + '~' + (KIND_PIP_Y - 1 + PIP_SIZE + 2) + ' amphib=' + AMPHIB_Y);
 `;
 
 let err = null;
