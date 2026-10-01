@@ -87,7 +87,7 @@ try { for (let i = 0; i < 120; i++){ vnow += 16.7; RAF_CB(vnow); } } catch(e){ c
 assert('A1 标题页 120 帧（矢量回退渲染）无异常', !crashed, crashed);
 
 assert('A2 全部坦克/道具图片资源标记加载成功',
-       Object.keys(IMG).length === 12 && Object.values(IMG).every(r => r.ok),
+       Object.keys(IMG).length === 13 && Object.keys(IMG).every(k => k === 'tank_player2' || IMG[k].ok),
        'IMG keys=' + Object.keys(IMG).length);
 
 startGame();
@@ -655,6 +655,60 @@ const qFullBg = __opStat.rects.some(r => r[0] === 0 && r[1] === 0 && r[2] === PL
 coarsePointer = qSavedCoarse;
 assert('Q6 地形无变化的一帧里没有整屏背景填充（黑底已并入地形缓存）',
        !qFullBg, 'fillRect=' + __opStat.fillRect + ' rects=' + JSON.stringify(__opStat.rects.slice(0, 8)));
+
+/* ---------- R. 双人辨识：玩家2 专属外观 + 状态各自独立 ----------
+ * 背景：两个玩家原本共用同一张贴图（tank_player.png），完全分不出谁是谁；
+ * 火力/武器虽一直挂在各自 tank 上（本就不共享），但界面只画 player 的一份，
+ * 于是玩家2 拾取后毫无反馈，看起来像「被共享了」。 */
+/* R1 色相旋转在「无像素接口」环境必须安全退化（返回 null → 调用方回退矢量绘制） */
+const rSavedCreateEl = document.createElement;
+document.createElement = function(){ return { width: 4, height: 4 }; };   // 故意不给 getContext
+let rHz = 'threw';
+try { rHz = hueRotate({ width: 4, height: 4 }, 168); } catch(e){ rHz = 'threw'; }
+document.createElement = rSavedCreateEl;
+assert('R1 hueRotate 安全退化：无 canvas 像素接口时返回 null 而非抛错', rHz === null,
+       'got=' + (rHz === 'threw' ? 'threw' : String(rHz)));
+
+/* R2 玩家2 配色是独立蓝色系，且旋转角在合理区间（不是 0 或 360 的无效值） */
+assert('R2 玩家2 配色为独立蓝色系（≠ 玩家1 的 #F5C518）+ 色相角有效',
+       P2_COLORS.body !== '#F5C518' && P2_HUE_SHIFT >= 90 && P2_HUE_SHIFT <= 270,
+       'body=' + P2_COLORS.body + ' shift=' + P2_HUE_SHIFT);
+
+/* R3 tankColors 按玩家返回不同配色（这是没有贴图素材时的回退路径，也要能分辨） */
+const rSavedNet = netMode, rSavedP2 = player2;
+netMode = 'host';
+player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', { power: 1 });
+const rCol1 = tankColors(player), rCol2 = tankColors(player2);
+assert('R3 tankColors：玩家1 黄 / 玩家2 蓝（取色确实不同）',
+       !!player && rCol1.body !== rCol2.body && rCol2.body === P2_COLORS.body,
+       'p1=' + rCol1.body + ' p2=' + rCol2.body);
+
+/* R4 道具提示标明归属：双人 → 「P1 /P2 」，单人 → 空串（原文案零变化） */
+const rT1 = whoTag(player), rT2 = whoTag(player2);
+netMode = 'off'; player2 = null;
+const rT3 = whoTag(player);
+assert('R4 whoTag：双人 →「P1 /P2 」，单人 → 空串',
+       rT1 === 'P1 ' && rT2 === 'P2 ' && rT3 === '',
+       JSON.stringify([rT1, rT2, rT3]));
+
+/* R5 状态不共享：玩家2 拾取火力/武器后，玩家1 的火力与武器必须原封不动 */
+netMode = 'host';
+player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', { power: 1 });
+const rP1Power = player.power, rP2Power = player2.power, rGun1 = player.gun, rAmmo1 = player.ammo;
+pickUpItem({ type:'star', dead:false }, player2);
+pickupWeapon('laser', player2);
+assert('R5 状态不共享：玩家2 拾取火力/武器后玩家1 完全不受影响',
+       !!player && player.power === rP1Power && player.gun === rGun1 && player.ammo === rAmmo1 &&
+       player2.power === rP2Power + 1 && player2.gun === 'laser' && player2.ammo > 0,
+       'p1{power=' + player.power + ',gun=' + player.gun + ',ammo=' + player.ammo + '} ' +
+       'p2{power=' + player2.power + ',gun=' + player2.gun + ',ammo=' + player2.ammo + '}');
+
+/* R6 玩家2 的武器/火力在 UI 上必须独立可见（双人时两行武器 + 两个 HUD 槽） */
+const rHudEl = document.getElementById('hud-weapon2');
+assert('R6 双人 UI：DOM HUD 存在玩家2 武器槽，且面板武器行走双行渲染',
+       !!rHudEl && rHudEl.id === 'hud-weapon2' && typeof drawWeaponLine === 'function',
+       'hud-weapon2=' + (rHudEl ? 'ok' : 'missing'));
+netMode = rSavedNet; player2 = rSavedP2;
 `;
 
 let err = null;

@@ -336,6 +336,55 @@ const SND_VOL = 0.55;   // 素材峰值已标准化到 0.95，统一衰减防爆
 
 /* 图片：加载失败自动回退矢量绘制 */
 const IMG = {};   // key -> { ok, el, flashEl }
+/* 双人辨识：两个玩家原本共用同一张贴图，完全分不出谁是谁。
+ * 玩家2 的贴图由玩家1 的贴图**整体色相旋转**得到（不新增素材文件），
+ * 配合独立配色 + 头顶「2」标记，色盲玩家也能靠明度差分辨。
+ * 玩家1 车体 #F5C518（H≈46°）旋转 168° 后约 H≈214°（青蓝），与既有的 P2 生命槽 #7FD0FF 呼应。 */
+const P2_HUE_SHIFT = 168;
+const P2_COLORS = { body:'#3FA9F5', dark:'#0B5FA5', light:'#BEE4FF', track:'#3A3F45', trackLight:'#767E88' };
+
+/* 白闪版本：source-atop 叠白，供 bonus 闪烁与全坦克受击反馈复用 */
+function makeFlashEl(el, fbW, fbH){
+  try {
+    const cv = document.createElement('canvas');
+    cv.width = el.width || fbW;
+    cv.height = el.height || fbH;
+    const g = cv.getContext('2d');
+    if (!g) return null;
+    g.drawImage(el, 0, 0);
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = 'rgba(255,255,255,0.72)';
+    g.fillRect(0, 0, cv.width, cv.height);
+    return cv;
+  } catch(e) { return null; }
+}
+/* 色相旋转（YIQ 亮度保持矩阵，与 CSS filter:hue-rotate 同系数）。
+ * 无 canvas / 无 getImageData / 像素被跨域污染时返回 null，调用方自动回退矢量绘制。 */
+function hueRotate(el, deg){
+  try {
+    const w = el.width || 28, h = el.height || 36;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d');
+    if (!g || typeof g.getImageData !== 'function' || typeof g.putImageData !== 'function') return null;
+    g.drawImage(el, 0, 0);
+    const id = g.getImageData(0, 0, w, h);
+    if (!id || !id.data) return null;
+    const d = id.data, a = deg * Math.PI / 180;
+    const c = Math.cos(a), s = Math.sin(a);
+    const m0 = 0.213 + c*0.787 - s*0.213, m1 = 0.715 - c*0.715 - s*0.715, m2 = 0.072 - c*0.072 + s*0.928;
+    const m3 = 0.213 - c*0.213 + s*0.143, m4 = 0.715 + c*0.285 + s*0.140, m5 = 0.072 - c*0.072 - s*0.283;
+    const m6 = 0.213 - c*0.213 - s*0.787, m7 = 0.715 - c*0.715 + s*0.715, m8 = 0.072 + c*0.928 + s*0.072;
+    for (let i = 0; i < d.length; i += 4){
+      const r = d[i], gg = d[i+1], b = d[i+2];
+      d[i]   = Math.max(0, Math.min(255, r*m0 + gg*m1 + b*m2));
+      d[i+1] = Math.max(0, Math.min(255, r*m3 + gg*m4 + b*m5));
+      d[i+2] = Math.max(0, Math.min(255, r*m6 + gg*m7 + b*m8));
+    }
+    g.putImageData(id, 0, 0);
+    return cv;
+  } catch(e) { return null; }
+}
 function loadImage(key, src){
   const rec = { ok: false, el: null, flashEl: null };
   IMG[key] = rec;
@@ -344,25 +393,20 @@ function loadImage(key, src){
     im.onload = () => {
       rec.ok = true;
       rec.el = im;
-      /* 白闪版本：source-atop 叠白，供 bonus 闪烁与全坦克受击反馈复用 */
-      if (key.indexOf('tank_') === 0){
-        try {
-          const cv = document.createElement('canvas');
-          cv.width = im.width || 28;
-          cv.height = im.height || 36;
-          const g = cv.getContext('2d');
-          g.drawImage(im, 0, 0);
-          g.globalCompositeOperation = 'source-atop';
-          g.fillStyle = 'rgba(255,255,255,0.72)';
-          g.fillRect(0, 0, cv.width, cv.height);
-          rec.flashEl = cv;
-        } catch(e) { rec.flashEl = null; }
+      if (key.indexOf('tank_') === 0) rec.flashEl = makeFlashEl(im, 28, 36);
+      /* 玩家2 专属贴图：由玩家1 贴图派生（onload 后才能做像素处理） */
+      if (key === 'tank_player'){
+        const el2 = hueRotate(im, P2_HUE_SHIFT);
+        IMG.tank_player2 = el2
+          ? { ok: true, el: el2, flashEl: makeFlashEl(el2, 28, 36) }
+          : { ok: false, el: null, flashEl: null };
       }
     };
     im.onerror = () => { rec.ok = false; };
     im.src = src;
   } catch(e) { rec.ok = false; }
 }
+IMG.tank_player2 = { ok: false, el: null, flashEl: null };   // 加载完成前占位，保证取图分支稳定
 for (const k in TANK_IMG_SRC) loadImage('tank_' + k, TANK_IMG_SRC[k]);
 for (const k in ITEM_IMG_SRC) loadImage('item_' + k, ITEM_IMG_SRC[k]);
 
@@ -1619,7 +1663,7 @@ function pickupWeapon(type, tank){
   else tank.ammo = g.ammo;
   tank.gun = type;
   sfx.itemPickup();
-  hint((tank.isPlayer ? '' : '敌军获得 ') + g.name + (tank.isPlayer ? ' ×' + tank.ammo : ''));
+  hint((tank.isPlayer ? whoTag(tank) : '敌军获得 ') + g.name + (tank.isPlayer ? ' ×' + tank.ammo : ''));
 }
 /* 敌军增援：场上敌人回满血 + 队列提前调出 1 只（队列空则补 1 只） */
 function enemyReinforce(){
@@ -1652,6 +1696,15 @@ function updateGrenades(dt){
   }
 }
 
+/* 道具归属前缀：双人时返回「P1 / P2」，单人或敌军返回空串。
+ * 武器与火力都挂在各自坦克上（本来就不共享），提示必须标明是谁拿到的，
+ * 否则玩家看到「火焰枪 ×15」会误以为队友也有一份。 */
+function whoTag(tank){
+  if (!tank || !tank.isPlayer) return '';
+  if (netMode === 'off' && !player2) return '';
+  return (player2 && tank === player2) ? 'P2 ' : 'P1 ';
+}
+
 function pickUpItem(it, tank){
   it.dead = true;
   sfx.item();
@@ -1661,6 +1714,7 @@ function pickUpItem(it, tank){
     case 'star':
       // 敌人火力封顶 2 级：3 级敌弹会蒸干水塘，永久改变地图连通性
       tank.power = Math.min(isP ? 3 : ENEMY_MAX_POWER, tank.power + 1);
+      if (isP) hint(whoTag(tank) + '火力 Lv' + tank.power);   // 双人时标明是谁升级
       break;
     case 'grenade':
       if (isP){
@@ -2035,7 +2089,11 @@ function drawBaseBroken(x, y){
 
 /* ================= 渲染：坦克（高清重绘） ================= */
 function tankColors(t){
-  if (t.isPlayer) return { body:'#F5C518', dark:'#8A6200', light:'#FFE987', track:'#4A4F57', trackLight:'#A9B4C0' };
+  if (t.isPlayer){
+    /* 双人：玩家2 用独立蓝配色（与色相偏移贴图同源），与玩家1 的黄色区分 */
+    if (player2 && t === player2) return P2_COLORS;
+    return { body:'#F5C518', dark:'#8A6200', light:'#FFE987', track:'#4A4F57', trackLight:'#A9B4C0' };
+  }
   if (t.kind === 'bonus'){
     const blink = flashOn(6);
     return blink ? { body:'#FF3B30', dark:'#7E120C', light:'#FF9A92', track:'#5A1E19', trackLight:'#C96A62' }
@@ -2133,7 +2191,10 @@ function drawTank(t){
     ctx.beginPath(); ctx.arc(cx, cy, 13, 0, 7); ctx.stroke();
   }
   // 像素贴图（素材 28x36，炮管朝上，中心对齐格心；等比缩放到 21x27，履带宽≈20 与格子对齐）
-  const trec = IMG['tank_' + t.kind] || (t.isPlayer ? IMG.tank_player : null);
+  // 双人：玩家2 用色相偏移后的专属贴图（同源派生），与玩家1 一眼分得开
+  const trec = (t.isPlayer && player2 && t === player2)
+    ? IMG.tank_player2
+    : (IMG['tank_' + t.kind] || (t.isPlayer ? IMG.tank_player : null));
   // 受击白闪与道具敌人白闪在「减少动效」下关闭（改用静态标记 + 血条反馈）
   const flash = !reduceMotion && (t.hitFlash > 0 || (t.kind === 'bonus' && flashOn(6)));
   if (trec && trec.ok){
@@ -2533,6 +2594,41 @@ function drawLifeIcon(x, y){
 }
 
 /* ================= 面板 ================= */
+/* 单行武器展示（双人时 P1/P2 各一行）。
+ * tag 为空表示单人 —— 此时排版参数与改动前逐像素一致（零视觉回归）。
+ * 必须定义在顶层：放进 drawPanel 内部会每帧新建闭包，违反「每帧零分配」。 */
+function drawWeaponLine(t, x, y, tag, tagColor){
+  let tx = x;
+  if (tag){
+    ctx.fillStyle = tagColor; ctx.font = 'bold 10px "Microsoft YaHei",sans-serif';
+    ctx.fillText(tag, x, y);
+    tx = x + 17;
+  }
+  const wpn = (t && t.gun) || 'normal';
+  if (!t || t.dead || wpn === 'normal'){
+    ctx.fillStyle = '#7E8792'; ctx.font = tag ? '11px sans-serif' : '12px sans-serif';
+    ctx.fillText('— 普通弹', tx, y);
+    return;
+  }
+  const wg = GUNS[wpn] || GUNS.normal;
+  const sz = tag ? 10 : 12;
+  px(tx, y - 10, sz, sz, wg.color);
+  ctx.fillStyle = '#14171B'; ctx.font = tag ? 'bold 9px "Arial Black",sans-serif' : 'bold 10px "Arial Black",sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(WEAPON_LETTER[wpn] || '?', tx + sz / 2, y - 1);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = wg.color; ctx.font = tag ? 'bold 11px sans-serif' : 'bold 12px sans-serif';
+  ctx.fillText(wg.name, tx + (tag ? 14 : 17), y);
+  ctx.fillStyle = '#FFFFFF'; ctx.font = tag ? 'bold 11px sans-serif' : 'bold 12px sans-serif';
+  ctx.fillText('×' + (t.ammo || 0), tx + (tag ? 72 : 82), y);
+}
+/* 多血档位的小血格（经典 1 血档位不画）；双人时格子更小，让出武器行的空间 */
+function drawHpPips(t, x, y, size, gap){
+  if (!t || t.dead || t.maxHp <= 1) return;
+  for (let i = 0; i < t.maxHp; i++){
+    px(x + i * gap, y, size, size, i < t.hp ? '#46B455' : '#3A3F45');
+  }
+}
 function drawPanel(){
   const x0 = PLAY_W;
   px(x0, 0, PANEL_W, H, '#1A1D21');
@@ -2590,30 +2686,21 @@ function drawPanel(){
     ctx.fillText('Lv'+lv+' '+GUN_NAMES[lv-1], x0+14+bw+12, gy+4);
   }
 
-  // 武器（常驻，位于火力下方）
-  const wpn = (player && player.gun) || 'normal';
-  const wg = GUNS[wpn] || GUNS.normal;
-  ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
-  ctx.fillText('武器 WEAPON', x0+14, 398);
-  if (wpn !== 'normal'){
-    px(x0+14, 404, 12, 12, wg.color);
-    ctx.fillStyle = '#14171B'; ctx.font = 'bold 10px "Arial Black",sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(WEAPON_LETTER[wpn] || '?', x0+20, 413);
-    ctx.textAlign = 'left';
-    ctx.fillStyle = wg.color; ctx.font = 'bold 12px sans-serif';
-    ctx.fillText(wg.name, x0+31, 414);
-    ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 12px sans-serif';
-    ctx.fillText('×' + player.ammo, x0+96, 414);
+  /* 武器（常驻，位于火力下方）。
+   * 武器与火力都挂在各自坦克上（本来就不共享），但旧版只画 player 一份，
+   * 玩家2 拿到武器在界面上毫无反馈 → 双人时必须 P1/P2 分两行展示。 */
+  const isCoopPanel = (netMode !== 'off' || !!player2);
+  if (isCoopPanel){
+    // P1/P2 标签本身即说明，省掉「武器 WEAPON」标题行以腾出垂直空间（398 / 413 两行）
+    drawWeaponLine(player,  x0+14, 398, 'P1', '#FFD23F');
+    drawWeaponLine(player2, x0+14, 413, 'P2', '#7FD0FF');
+    drawHpPips(player,  x0+122, 392, 7, 9);
+    drawHpPips(player2, x0+122, 407, 7, 9);
   } else {
-    ctx.fillStyle = '#7E8792'; ctx.font = '12px sans-serif';
-    ctx.fillText('— 普通弹', x0+14, 414);
-  }
-  // 玩家血格（多血档位才画）
-  if (player && !player.dead && player.maxHp > 1){
-    for (let i = 0; i < player.maxHp; i++){
-      px(x0+118 + i*12, 405, 10, 10, i < player.hp ? '#46B455' : '#3A3F45');
-    }
+    ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
+    ctx.fillText('武器 WEAPON', x0+14, 398);
+    drawWeaponLine(player, x0+14, 414, null, null);
+    drawHpPips(player, x0+118, 405, 10, 12);
   }
 
   // 红色道具敌人剩余
@@ -2629,21 +2716,28 @@ function drawPanel(){
   ctx.fillText('↑↓←→/WASD · 空格射击', x0+14, 464);
   ctx.fillText('P 暂停  M 静音  H 血量', x0+14, 480);
 
-  /* 状态区：双列紧凑，3 行容纳 6 个状态，避免溢出画布 */
+  /* 状态区：双列紧凑，3 行容纳 6 个状态，避免溢出画布。
+   * 状态挂在各自坦克上（不共享），双人时加 P1/P2 前缀并各自成条，避免被误读成共享。 */
   let ny = 484, nx = x0 + 14;
   ctx.font = 'bold 11px sans-serif';
   const st = (txt, col) => {
     ctx.fillStyle = col; ctx.fillText(txt, nx, ny);
     if (nx === x0 + 14) nx = x0 + 88; else { nx = x0 + 14; ny += 15; }
   };
+  const pT = isCoopPanel ? 'P1 ' : '', qT = 'P2 ', p2Alive = isCoopPanel && player2 && !player2.dead;
   if (freezeEnemies > 0) st('冻敌 ' + freezeEnemies.toFixed(1), '#7FD0FF');
   if (freezePlayer > 0) st('冻我 ' + freezePlayer.toFixed(1), '#FF8A6B');
   if (player && playerEagle > 0) st('老鹰 ' + playerEagle.toFixed(1), '#FFC300');
-  else if (player && player.invuln > 2.5) st('护盾 ' + player.invuln.toFixed(1), '#7FD0FF');
-  if (player && player.amphibious > 0) st('两栖 ' + player.amphibious.toFixed(1), '#7FD0FF');
-  if (player && player.burnT > 0) st('燃烧 ' + player.burnT.toFixed(1), '#FF6A00');
-  if (player && player.slowT > 0) st('减速 ' + player.slowT.toFixed(1), '#BFE9FF');
-  if (player && player.overheatT > 0) st('过热 ' + player.overheatT.toFixed(1), '#FF8A00');
+  else if (player && player.invuln > 2.5) st(pT + '护盾 ' + player.invuln.toFixed(1), '#7FD0FF');
+  if (p2Alive && player2.invuln > 2.5) st(qT + '护盾 ' + player2.invuln.toFixed(1), '#7FD0FF');
+  if (player && player.amphibious > 0) st(pT + '两栖 ' + player.amphibious.toFixed(1), '#7FD0FF');
+  if (p2Alive && player2.amphibious > 0) st(qT + '两栖 ' + player2.amphibious.toFixed(1), '#7FD0FF');
+  if (player && player.burnT > 0) st(pT + '燃烧 ' + player.burnT.toFixed(1), '#FF6A00');
+  if (p2Alive && player2.burnT > 0) st(qT + '燃烧 ' + player2.burnT.toFixed(1), '#FF6A00');
+  if (player && player.slowT > 0) st(pT + '减速 ' + player.slowT.toFixed(1), '#BFE9FF');
+  if (p2Alive && player2.slowT > 0) st(qT + '减速 ' + player2.slowT.toFixed(1), '#BFE9FF');
+  if (player && player.overheatT > 0) st(pT + '过热 ' + player.overheatT.toFixed(1), '#FF8A00');
+  if (p2Alive && player2.overheatT > 0) st(qT + '过热 ' + player2.overheatT.toFixed(1), '#FF8A00');
   /* 音频被浏览器挂起时的可见提示（点一下屏幕即可恢复） */
   if (!muted && audioBlocked()){
     ctx.fillStyle = '#98A2AD'; ctx.font = '11px sans-serif';
@@ -2662,6 +2756,7 @@ const hudLevel  = document.getElementById('hud-level');
 const hudPower  = document.getElementById('hud-power');
 const hudEnemy  = document.getElementById('hud-enemy');
 const hudWeapon = document.getElementById('hud-weapon');
+const hudWeapon2 = document.getElementById('hud-weapon2');   // 双人：玩家2 的武器（状态不共享）
 const _hudCache = Object.create(null);
 function hearts(n){                       // 避免依赖 String.prototype.repeat
   let s = ''; for (let i = 0; i < n; i++) s += '♥'; return s || '—';
@@ -2679,11 +2774,17 @@ function syncHud(){
   setHud(hudLives,  lives  > 0 ? hearts(lives)  : '—');
   setHud(hudLives2, lives2 > 0 ? hearts(lives2) : '—');
   setHud(hudLevel,  String(level).padStart(2, '0') + (isBossLevel() ? '·BOSS' : (isEliteLevel() ? '·精英' : '')));
-  setHud(hudPower,  'Lv' + ((player && player.power) || 1));
+  const isCoop = (netMode !== 'off' || !!player2);
+  const pw1 = (player && player.power) || 1, pw2 = (player2 && player2.power) || 1;
+  /* 火力与武器都挂在各自坦克上：双人时按 P1/P2 并列展示，玩家2 的升级才有反馈 */
+  setHud(hudPower,  isCoop ? ('Lv' + pw1 + '/' + pw2) : ('Lv' + pw1));
   const hw = (player && player.gun) || 'normal';
-  setHud(hudWeapon, hw === 'normal' ? '—' : ((WEAPON_LETTER[hw] || '?') + ' ' + (GUNS[hw] || {}).name + ' ×' + player.ammo));
+  setHud(hudWeapon, hw === 'normal' ? '—' : ((WEAPON_LETTER[hw] || '?') + ' ' + (GUNS[hw] || {}).name + ' ×' + ((player && player.ammo) || 0)));
+  const hw2 = (player2 && player2.gun) || 'normal';
+  setHud(hudWeapon2, (hw2 === 'normal' || !player2) ? '—'
+    : ((WEAPON_LETTER[hw2] || '?') + ' ' + (GUNS[hw2] || {}).name + ' ×' + (player2.ammo || 0)));
   setHud(hudEnemy,  String(remain).padStart(2, '0'));
-  hudEl.classList.toggle('coop', netMode !== 'off' || !!player2);
+  hudEl.classList.toggle('coop', isCoop);
 }
 
 /* 覆盖层文字：先画半透明黑幕，再逐行居中描字。

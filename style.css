@@ -175,6 +175,8 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
   #hud .hud-i.wpn b { color:#F0C040; }
   #hud .hud-i.p2 { display:none; }
   #hud.coop .hud-i.p2 { display:inline; color:#7FD0FF; }
+  /* 玩家2 的武器数字同样走蓝色语义色（否则被 .wpn b 的黄色覆盖，与 P1 混淆） */
+  #hud.coop .hud-i.p2 b { color:#7FD0FF; }
 }
 
 /* 画面内操作按钮：标题 / 结束 / 过关 / 暂停 的主入口。

@@ -414,6 +414,21 @@ function unit() {
   assert('快照含 player2 且 applySnapshot 还原 player2', round.before.p2 && round.after.p2, JSON.stringify(round));
   assert('快照往返保留 lives2', round.before.lives2 === 2 && round.after.lives2 === 2, JSON.stringify(round));
 
+  // 武器/火力挂在各自坦克上，快照逐坦克携带 → 联机下玩家2 的状态同样独立（不共享）
+  const wRound = vm.runInContext(`(function(){
+    player.power = 3; player.gun = 'flame'; player.ammo = 7;
+    player2.power = 1; player2.gun = 'tesla'; player2.ammo = 4;
+    var s = serializeSnapshot();
+    player.power = 1; player.gun = 'normal'; player.ammo = 0;
+    player2.power = 2; player2.gun = 'normal'; player2.ammo = 0;
+    applySnapshot(s);
+    return { p1:[player.power, player.gun, player.ammo], p2:[player2.power, player2.gun, player2.ammo] };
+  })()`, context);
+  assert('快照各自携带武器/火力：玩家2 与玩家1 完全独立（不共享）',
+    JSON.stringify(wRound.p1) === JSON.stringify([3, 'flame', 7]) &&
+    JSON.stringify(wRound.p2) === JSON.stringify([1, 'tesla', 4]),
+    JSON.stringify(wRound));
+
   /* 暂停同步：暂停标记必须进快照，作为 pause 消息丢包时的兜底；
    * 客方 applySnapshot 时要「跟随但不再回广播」，否则两边会互相回环。 */
   const pz = vm.runInContext("(function(){" +
