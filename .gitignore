@@ -4,13 +4,10 @@ dist/
 build/
 
 # 日志与临时文件
+# 约定：临时产物一律以 "_" 开头（诊断图 / 测试输出），绝不入库。
 *.log
-_check.log
-_verify.log
-_env.txt
-_vc.txt
-_diag.txt
-_lines.txt
+_*.txt
+_*.png
 
 # 编辑器 / 系统
 .DS_Store

@@ -210,32 +210,83 @@ function flushTerrain(){
   ctx = swap;
 }
 
-/* 高分屏适配：按 devicePixelRatio 放大画布背板，绘制时缩放坐标系，
- * 逻辑坐标仍是 680x520（所有绘制代码无需改动），手机高分屏不再发虚。 */
-let DPR = 1;
-function setupHiDPI(){
-  const dpr = Math.max(1, Math.min(3, (typeof window !== 'undefined' && window.devicePixelRatio) || 1));
-  DPR = dpr;
-  canvas.width = Math.round(W * dpr);
-  canvas.height = Math.round(H * dpr);
-  initTerrain();   // DPR 变化后地形缓存需按新分辨率重建
+/* ================= 图块精灵：把「逐格重绘」变为「每格一次 drawImage」 =================
+ * 水 / 树 / 老鹰基地原先每帧按格重画，成本随格子数线性增长：
+ *   - 老鹰基地：20x20 像素图 → 每帧最多 400 次 fillRect + 400 次 fillStyle
+ *   - 树：每格 2 次 fillRect + 4 次 arc
+ *   - 水：每格 4 次 fillRect
+ * 但它们只与「格子外观 / 波纹相位」有关、与所在位置无关，
+ * 因此预渲染成 24x24（老鹰 40x40）的小精灵，运行时每格只提交一次 drawImage。
+ * 绘制代码原地复用（仅把 ctx 临时切到离屏画布），视觉与原实现逐像素一致。 */
+let tileSprites = null;      // { tree, water:[相位0, 相位1] }
+let eagleSprite = null;      // 40x40：金色底座 + 像素老鹰（基地）
+let eagleItemSprite = null;  // 20x20：老鹰道具图标
+let bulletSprites = null;    // { 'gun:power' -> 16x20 弹体精灵 }
+function makeSprite(w, h, paint){
+  const cv = document.createElement('canvas');
+  cv.width  = Math.max(1, Math.round(w * DPR));
+  cv.height = Math.max(1, Math.round(h * DPR));
+  const c2 = (typeof cv.getContext === 'function') ? cv.getContext('2d') : null;
+  if (!c2) return null;
+  const swap = ctx;
+  ctx = c2;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  paint();
+  ctx = swap;
+  return cv;
 }
-setupHiDPI();
-if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', setupHiDPI);
+function initTileSprites(){
+  if (tileSprites) return;
+  tileSprites = {
+    tree:  makeSprite(TILE, TILE, () => paintTree(0, 0)),
+    water: [ makeSprite(TILE, TILE, () => paintWater(true,  0, 0)),   // 相位 0：波纹在上
+             makeSprite(TILE, TILE, () => paintWater(false, 0, 0)) ], // 相位 1：波纹在下
+  };
+}
+function initEagleSprite(){
+  if (eagleSprite) return;
+  eagleSprite = makeSprite(40, 40, () => {
+    px(0, 0, 40, 40, '#8A5A00');   // 金色底座
+    px(2, 2, 36, 36, '#FFC300');
+    px(4, 4, 32, 32, '#FFDB4D');
+    px(4, 4, 32, 2, '#FFEEA0');
+    paintEagleArt(0, 0, 2);        // 20x20 像素老鹰（放大 2 倍）
+  });
+}
 
 /* 触屏设备识别：命中时 canvas 只保留游戏区（面板由 CSS 裁掉），
  * 分数/命数/关卡等信息改由 DOM HUD（#hud）以正常字号呈现，解决小屏不可读问题。
- * 桌面端 coarsePointer=false，canvas 内面板绘制路径完全不变。 */
+ * 桌面端 coarsePointer=false，canvas 内面板绘制路径完全不变。
+ * 注：必须在 setupHiDPI 之前确定，DPR 上限依赖它。 */
 let coarsePointer = false;
 function syncCoarsePointer(){
   try { coarsePointer = typeof matchMedia === 'function' && matchMedia('(pointer:coarse)').matches; }
   catch (e) { coarsePointer = false; }
 }
+
+/* 高分屏适配：按 devicePixelRatio 放大画布背板，绘制时缩放坐标系，
+ * 逻辑坐标仍是 680x520（所有绘制代码无需改动），手机高分屏不再发虚。
+ * 上限策略：桌面 3x；触屏 2x —— 手机上 DPR 3 会把背板撑到约 2000x1560
+ * （每帧 320 万像素的填充率），而像素风在 2x 下已看不出差别，故触屏封顶 2x。 */
+const DPR_MAX_DESKTOP = 3, DPR_MAX_TOUCH = 2;
+let DPR = 1;
+function setupHiDPI(){
+  const raw = Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+  const dpr = Math.min(coarsePointer ? DPR_MAX_TOUCH : DPR_MAX_DESKTOP, raw);
+  DPR = dpr;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  initTerrain();                        // DPR 变化后地形缓存需按新分辨率重建
+  tileSprites = null; eagleSprite = null; eagleItemSprite = null;   // 精灵同理：按新 DPR 重新烘焙
+  bulletSprites = null;
+}
 syncCoarsePointer();
+setupHiDPI();
 if (typeof window !== 'undefined' && window.addEventListener){
+  window.addEventListener('resize', setupHiDPI);
   try {
     const mq = typeof matchMedia === 'function' ? matchMedia('(pointer:coarse)') : null;
-    if (mq && mq.addEventListener) mq.addEventListener('change', syncCoarsePointer);
+    if (mq && mq.addEventListener) mq.addEventListener('change', () => { syncCoarsePointer(); setupHiDPI(); });
   } catch (e) { /* 老浏览器忽略 */ }
 }
 
@@ -846,6 +897,16 @@ function countBullets(t){
   return n;
 }
 
+/* 存活计数 / 原地剔除：游戏循环里原先每帧多处写 enemies.filter(...).length，
+ * 每次都会新建数组——60fps 下持续产生垃圾，表现为偶发 GC 掉帧。
+ * 改为无分配的普通循环，语义完全一致。 */
+function countAlive(list){
+  let n = 0;
+  for (let i = 0; i < list.length; i++) if (!list[i].dead) n++;
+  return n;
+}
+function remainEnemyCount(){ return enemyQueue.length + countAlive(enemies); }
+
 /* 弹速与 power 线性相关 —— 吞噬降级后必须按新等级重算，
  * 否则会出现「2 级外形顶着 3 级速度飞」的手感漂移。 */
 function bulletSpeed(owner, power){
@@ -1334,7 +1395,9 @@ function updateBullets(dt){
       if (!b.dead) tryBulletClash(b);
     }
   }
-  bullets = bullets.filter(b => !b.dead);
+  let bw = 0;   // 原地剔除已死亡子弹（无分配）
+  for (let i = 0; i < bullets.length; i++){ const b = bullets[i]; if (!b.dead) bullets[bw++] = b; }
+  bullets.length = bw;
 }
 
 /* 统一伤害入口：invuln 守卫内聚在这里，
@@ -1702,15 +1765,20 @@ function update(dt){
     fieldTimer -= dt;
     if (fieldTimer <= 0){ refreshFields(); fieldTimer = 0.35; }
     spawnTimer -= dt;
-    const aliveCount = enemies.filter(e => !e.dead).length;
+    const aliveCount = countAlive(enemies);
     if (enemyQueue.length && aliveCount < 4 && spawnTimer <= 0){
       spawnEnemy();
       spawnTimer = 2.0 + Math.random() * 1.2;
     }
     for (const it of items) it.t += dt;
     collectItems();
-    items = items.filter(it => !it.dead && it.t < ITEM_LIFE);
-    enemies = enemies.filter(e => !e.dead);
+    /* 原地剔除（无分配）：过期/已拾取的道具、已死亡敌人 */
+    let iw = 0;
+    for (let i = 0; i < items.length; i++){ const it = items[i]; if (!it.dead && it.t < ITEM_LIFE) items[iw++] = it; }
+    items.length = iw;
+    let ew = 0;
+    for (let i = 0; i < enemies.length; i++){ const e = enemies[i]; if (!e.dead) enemies[ew++] = e; }
+    enemies.length = ew;
     if (!enemyQueue.length && !enemies.length && playerTargets().length > 0){
       state = 'clear';
       startLockT = gameTime + 0.8;   // 过关瞬间防误触
@@ -1722,7 +1790,9 @@ function update(dt){
     }
   }
   for (const ex of explosions) ex.t += dt;
-  explosions = explosions.filter(ex => ex.t < ex.dur);
+  let xw = 0;
+  for (let i = 0; i < explosions.length; i++){ const ex = explosions[i]; if (ex.t < ex.dur) explosions[xw++] = ex; }
+  explosions.length = xw;
 }
 
 /* ================= 渲染：地形 ================= */
@@ -1754,22 +1824,67 @@ function drawSteel(x, y){
   px(x+4, y+14, 2, 2, '#E8EBEF');
   px(x+14, y+14, 2, 2, '#E8EBEF');
 }
+/* 水的实际绘制（供精灵烘焙与回退共用）：w=波纹相位 */
+function paintWater(w, ox, oy){
+  px(ox, oy, TILE, TILE, '#1F6FC0');
+  px(ox+1, oy + (w ? 5 : 13), 18, 5, w ? '#4FA3E8' : '#2E86D8');
+  px(ox+3, oy+2, 5, 2, 'rgba(255,255,255,0.30)');
+  px(ox+12, oy+16, 5, 2, 'rgba(255,255,255,0.18)');
+}
+/* 水：波纹只有两个相位，漂移相位由格子坐标决定 → 每格一次 drawImage */
 function drawWater(x, y){
-  px(x, y, TILE, TILE, '#1F6FC0');
-  const w = (Math.floor(gameTime * (reduceMotion ? 0 : 3)) + Math.floor(y/TILE) + Math.floor(x/TILE)) % 2 === 0;
-  px(x+1, y + (w ? 5 : 13), 18, 5, w ? '#4FA3E8' : '#2E86D8');
-  px(x+3, y+2, 5, 2, 'rgba(255,255,255,0.30)');
-  px(x+12, y+16, 5, 2, 'rgba(255,255,255,0.18)');
+  initTileSprites();
+  const phase = (Math.floor(gameTime * (reduceMotion ? 0 : 3)) + Math.floor(y/TILE) + Math.floor(x/TILE)) & 1;
+  const sp = tileSprites && tileSprites.water[phase];
+  if (sp) ctx.drawImage(sp, x, y, TILE, TILE);
+  else paintWater(phase === 0, x, y);   // 回退（无 canvas 环境）
+}
+/* 树的实际绘制（供精灵烘焙共用）。树在一关内不会被破坏，外观恒定。 */
+function paintTree(ox, oy){
+  px(ox+2, oy+2, 16, 16, '#12481C');
+  ctx.fillStyle = '#2E8B3A';
+  ctx.beginPath(); ctx.arc(ox+6, oy+6, 6, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(ox+14, oy+13, 5, 0, 7); ctx.fill();
+  ctx.fillStyle = '#46B455';
+  ctx.beginPath(); ctx.arc(ox+5, oy+12, 3.5, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(ox+13, oy+5, 3, 0, 7); ctx.fill();
+  px(ox+8, oy+14, 4, 4, '#5A3A16');
 }
 function drawTree(x, y){
-  px(x+2, y+2, 16, 16, '#12481C');
-  ctx.fillStyle = '#2E8B3A';
-  ctx.beginPath(); ctx.arc(x+6, y+6, 6, 0, 7); ctx.fill();
-  ctx.beginPath(); ctx.arc(x+14, y+13, 5, 0, 7); ctx.fill();
-  ctx.fillStyle = '#46B455';
-  ctx.beginPath(); ctx.arc(x+5, y+12, 3.5, 0, 7); ctx.fill();
-  ctx.beginPath(); ctx.arc(x+13, y+5, 3, 0, 7); ctx.fill();
-  px(x+8, y+14, 4, 4, '#5A3A16');
+  initTileSprites();
+  const sp = tileSprites && tileSprites.tree;
+  if (sp) ctx.drawImage(sp, x, y, TILE, TILE);
+  else paintTree(x, y);
+}
+
+/* 弹体：形状只由「火力等级 + 武器配色」决定，与位置无关 →
+ * 烘焙成 16x20 精灵（中心在 8,10），渲染时一次 setTransform + 一次 drawImage。
+ * 取代原先每发子弹的 save/translate/rotate + 3 次 fillRect + restore。 */
+const BULLET_SPR_W = 16, BULLET_SPR_H = 20;
+function paintBullet(gc, p, ox, oy){
+  if (p === 1){
+    px(ox-2, oy-5, 4, 10, gc);
+    px(ox-1, oy-4, 2, 8, '#FFD23F');
+  } else if (p === 2){
+    px(ox-3, oy-6, 6, 12, gc);
+    px(ox-2, oy-5, 4, 10, '#FF6A00');
+    px(ox-1, oy-4, 2, 8, '#FFD23F');
+  } else {
+    px(ox-4, oy-7, 8, 14, gc);
+    px(ox-3, oy-6, 6, 12, '#FF2D2D');
+    px(ox-1.5, oy-5, 3, 10, '#FFD23F');
+  }
+}
+function bulletSprite(gun, power){
+  if (!bulletSprites) bulletSprites = Object.create(null);
+  const key = gun + ':' + power;
+  let sp = bulletSprites[key];
+  if (sp === undefined){
+    const gc = (GUNS[gun] || GUNS.normal).color;
+    sp = makeSprite(BULLET_SPR_W, BULLET_SPR_H, () => paintBullet(gc, power, BULLET_SPR_W/2, BULLET_SPR_H/2));
+    bulletSprites[key] = sp;
+  }
+  return sp;
 }
 function drawDesert(x, y){
   px(x, y, TILE, TILE, '#DDA63F');
@@ -1825,38 +1940,39 @@ const EAGLE_PIX = [
   '.........W...W......',
 ];
 const EAGLE_COLORS = { D:'#6E3A12', B:'#B5762C', W:'#FFF8E7', K:'#16181C', O:'#FF9E00' };
-function drawEagle(x, y){
-  // 脉动金色光晕
-  const pulse = 0.5 + 0.5 * Math.sin(gameTime * 3);
-  ctx.fillStyle = 'rgba(255,195,0,' + (0.10 + pulse * 0.16).toFixed(3) + ')';
-  ctx.fillRect(x - 2, y - 2, 44, 44);
-  // 金色底座
-  px(x, y, 40, 40, '#8A5A00');
-  px(x + 2, y + 2, 36, 36, '#FFC300');
-  px(x + 4, y + 4, 32, 32, '#FFDB4D');
-  px(x + 4, y + 4, 32, 2, '#FFEEA0');
-  const S = 2;
+/* 像素老鹰的实际绘制（供精灵烘焙共用）：把 EAGLE_PIX 的字母逐像素铺格 */
+function paintEagleArt(ox, oy, S){
   for (let r = 0; r < 20; r++){
     const row = EAGLE_PIX[r];
     for (let c = 0; c < 20; c++){
       const ch = row[c];
       if (ch === '.') continue;
       ctx.fillStyle = EAGLE_COLORS[ch];
-      ctx.fillRect(x + c*S, y + r*S, S, S);
+      ctx.fillRect(ox + c*S, oy + r*S, S, S);
     }
   }
 }
-/* 老鹰道具图标：复用基地老鹰像素图，1:1 铺满一个格子 */
-function drawEagleItem(x, y){
-  for (let r = 0; r < EAGLE_PIX.length; r++){
-    const row = EAGLE_PIX[r];
-    for (let c = 0; c < row.length; c++){
-      const ch = row[c];
-      if (ch === '.') continue;
-      ctx.fillStyle = EAGLE_COLORS[ch];
-      ctx.fillRect(x + c, y + r, 1, 1);
-    }
+function drawEagle(x, y){
+  // 脉动金色光晕：随 gameTime 变化，保持每帧绘制
+  const pulse = 0.5 + 0.5 * Math.sin(gameTime * 3);
+  ctx.fillStyle = 'rgba(255,195,0,' + (0.10 + pulse * 0.16).toFixed(3) + ')';
+  ctx.fillRect(x - 2, y - 2, 44, 44);
+  // 金色底座 + 像素老鹰：一次 drawImage 取代原先每帧最多 400 次 fillRect
+  initEagleSprite();
+  if (eagleSprite) ctx.drawImage(eagleSprite, x, y, 40, 40);
+  else {
+    px(x, y, 40, 40, '#8A5A00');
+    px(x + 2, y + 2, 36, 36, '#FFC300');
+    px(x + 4, y + 4, 32, 32, '#FFDB4D');
+    px(x + 4, y + 4, 32, 2, '#FFEEA0');
+    paintEagleArt(x, y, 2);
   }
+}
+/* 老鹰道具图标：复用基地老鹰像素图，1:1 铺满一个格子（同样烘焙成精灵） */
+function drawEagleItem(x, y){
+  if (!eagleItemSprite) eagleItemSprite = makeSprite(20, 20, () => paintEagleArt(0, 0, 1));
+  if (eagleItemSprite) ctx.drawImage(eagleItemSprite, x, y, 20, 20);
+  else paintEagleArt(x, y, 1);
 }
 function drawBaseBroken(x, y){
   px(x+3, y+3, 34, 34, '#3A3F45');
@@ -2264,26 +2380,18 @@ function render(){
   if (player) drawTank(player);
   if (player2) drawTank(player2);
   for (const e of enemies) drawTank(e);
+  /* 子弹：把「旋转矩阵」直接并入 setTransform，省掉每发的 save/translate/rotate/restore；
+   * 弹体形状走预烘焙精灵（见 bulletSprite）。约 10 次绘制指令 → 2 次。 */
   for (const b of bullets){
-    ctx.save();
-    ctx.translate(b.px, b.py);
-    ctx.rotate((b.ang == null ? angFor(b.dir) : b.ang) + Math.PI / 2);
     const p = b.power || 1;
-    const gc = (GUNS[b.gun] || GUNS.normal).color;
-    if (p === 1){
-      px(-2, -5, 4, 10, gc);
-      px(-1, -4, 2, 8, '#FFD23F');
-    } else if (p === 2){
-      px(-3, -6, 6, 12, gc);
-      px(-2, -5, 4, 10, '#FF6A00');
-      px(-1, -4, 2, 8, '#FFD23F');
-    } else {
-      px(-4, -7, 8, 14, gc);
-      px(-3, -6, 6, 12, '#FF2D2D');
-      px(-1.5, -5, 3, 10, '#FFD23F');
-    }
-    ctx.restore();
+    const sp = bulletSprite(b.gun, p);
+    const ang = (b.ang == null ? angFor(b.dir) : b.ang) + Math.PI / 2;
+    const co = Math.cos(ang), si = Math.sin(ang);
+    ctx.setTransform(DPR*co, DPR*si, -DPR*si, DPR*co, DPR*b.px, DPR*b.py);
+    if (sp) ctx.drawImage(sp, -BULLET_SPR_W/2, -BULLET_SPR_H/2, BULLET_SPR_W, BULLET_SPR_H);
+    else paintBullet((GUNS[b.gun] || GUNS.normal).color, p, 0, 0);   // 回退：无 canvas 环境（变换已就位）
   }
+  if (bullets.length) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // 复位（后续绘制依赖基础变换）
   drawGrenadeWarn();
   for (const ex of explosions) drawExplosion(ex);
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
@@ -2380,7 +2488,7 @@ function drawPanel(){
 
   ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
   ctx.fillText('敌余 ENEMY', x0+14, 228);
-  const remain = enemyQueue.length + enemies.filter(e => !e.dead).length;
+  const remain = remainEnemyCount();
   ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 20px sans-serif';
   ctx.fillText(String(remain).padStart(2,'0'), x0+14, 250);
 
@@ -2432,7 +2540,9 @@ function drawPanel(){
   }
 
   // 红色道具敌人剩余
-  const bonusLeft = enemyQueue.filter(k => k === 'bonus').length + enemies.filter(e => !e.dead && e.kind === 'bonus').length;
+  let bonusLeft = 0;
+  for (const k of enemyQueue) if (k === 'bonus') bonusLeft++;
+  for (const e of enemies) if (!e.dead && e.kind === 'bonus') bonusLeft++;
   ctx.fillStyle = '#FF6B6B'; ctx.font = 'bold 11px sans-serif';
   ctx.fillText('★ 道具敌 x' + bonusLeft + '（击杀必掉）', x0+14, 434);
 
@@ -2487,7 +2597,7 @@ function setHud(node, val){
 }
 function syncHud(){
   if (!hudEl || !hudEl.classList) return;
-  const remain = enemyQueue.length + enemies.filter(e => !e.dead).length;
+  const remain = remainEnemyCount();
   setHud(hudScore,  String(score).padStart(6, '0'));
   setHud(hudLives,  lives  > 0 ? hearts(lives)  : '—');
   setHud(hudLives2, lives2 > 0 ? hearts(lives2) : '—');
@@ -2592,7 +2702,7 @@ function drawCurtain(){
     ctx.fillText(levelTag() + ' · 地貌 ' + levelThemeName, PLAY_W/2, PLAY_H/2 + 12);
     ctx.fillStyle = '#D9DDE3';
     ctx.font = '14px sans-serif';
-    ctx.fillText('敌军 × ' + (enemyQueue.length + enemies.filter(e => !e.dead).length) + ' · 保卫基地', PLAY_W/2, PLAY_H/2 + 36);
+    ctx.fillText('敌军 × ' + remainEnemyCount() + ' · 保卫基地', PLAY_W/2, PLAY_H/2 + 36);
     ctx.textAlign = 'left';
   }
 }

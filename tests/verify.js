@@ -3,8 +3,18 @@ const fs = require('fs');
 const vm = require('vm');
 
 const noop = () => {};
+/* 同时统计绘制指令数：用于「逐格重绘 → 精灵化」的性能回归断言 */
+const opStat = { calls: 0, fillRect: 0, drawImage: 0 };
 const ctxStub = new Proxy({}, {
-  get(t, p){ return (p in t) ? t[p] : noop; },
+  get(t, p){
+    if (p === '__opStat') return opStat;
+    if (p in t) return t[p];
+    return function (){
+      opStat.calls++;
+      if (p === 'fillRect') opStat.fillRect++;
+      else if (p === 'drawImage') opStat.drawImage++;
+    };
+  },
   set(t, p, v){ t[p] = v; return true; },
 });
 const mkEl = (id) => {
@@ -41,6 +51,7 @@ const sandbox = {
   console, TESTOUT: [], vnow: 0, RAF_CB: null,
   Image: ImageStub, Audio: AudioStub,
   __setImgFail: v => { IMG_FAIL = v; },
+  __opStat: opStat,
   window: { addEventListener: noop, AudioContext: undefined, webkitAudioContext: undefined },
   document: {
     getElementById: id => (EL_CACHE[id] || (EL_CACHE[id] = mkEl(id))),
@@ -416,6 +427,48 @@ codexOv.classList = { toggle:(c,on)=>{ if(c==='show') cxShown = !!on; }, add:NO,
 const cxClick = (cxBtn.__h && cxBtn.__h.click) || [];
 if (cxClick.length) cxClick[0]();
 assert('L3 点击「图鉴」按钮显示覆盖层', cxShown === true, 'handlers=' + cxClick.length);
+
+/* ---------- M. 渲染性能：逐格重绘 → 精灵化（回归守卫） ----------
+ * 老鹰/树/水原先每帧逐格重绘（老鹰最多 400 次 fillRect），
+ * 已改为预烘焙精灵 + 每格一次 drawImage。这里锁死「不许改回去」。 */
+startGame();
+for (let i = 0; i < 260; i++){ vnow += 16.7; RAF_CB(vnow); }   // 跳过幕布，让敌人入场
+
+initTileSprites(); initEagleSprite();
+assert('M1 老鹰/树/水已烘焙为精灵，且按 DPR 分辨率',
+       !!eagleSprite && eagleSprite.width === 40 * DPR &&
+       !!tileSprites && !!tileSprites.tree && tileSprites.tree.width === TILE * DPR &&
+       tileSprites.water.length === 2,
+       'eagle=' + (eagleSprite && eagleSprite.width) + ' tree=' + (tileSprites && tileSprites.tree && tileSprites.tree.width));
+
+const bs1 = bulletSprite('flame', 3), bs2 = bulletSprite('flame', 3), bs3 = bulletSprite('normal', 1);
+assert('M2 子弹精灵按 gun:power 缓存复用（不重复烘焙）',
+       !!bs1 && bs1 === bs2 && bs1 !== bs3, 'w=' + (bs1 && bs1.width));
+
+/* 单帧绘制指令数：逐格重绘时代 fillRect≈320/帧，精灵化后应远低于此 */
+__opStat.fillRect = 0; __opStat.drawImage = 0;
+render();
+const mFill = __opStat.fillRect, mImg = __opStat.drawImage;
+assert('M3 单帧 fillRect 远低于逐格重绘基线（精灵化生效）', mFill < 150,
+       'fillRect=' + mFill + ' drawImage=' + mImg);
+
+/* DPR 封顶：触屏 2x / 桌面 3x（devicePixelRatio 超额时被夹紧） */
+const savedDPR = window.devicePixelRatio, savedCP = coarsePointer;
+window.devicePixelRatio = 4;
+coarsePointer = true;  setupHiDPI(); const touchDPR = DPR;
+coarsePointer = false; setupHiDPI(); const deskDPR = DPR;
+window.devicePixelRatio = savedDPR; coarsePointer = savedCP; setupHiDPI();
+assert('M4 DPR 封顶：触屏 2x、桌面 3x', touchDPR === 2 && deskDPR === 3,
+       'touch=' + touchDPR + ' desktop=' + deskDPR);
+
+/* 无分配的存活统计（原先每帧多次 enemies.filter().length 会产生垃圾） */
+const savedEnemies = enemies, savedQueue = enemyQueue;
+enemies = [{ dead:false }, { dead:true }, { dead:false }];
+enemyQueue = ['basic', 'bonus', 'bonus'];
+assert('M5 存活/剩余计数正确（无分配循环取代 filter）',
+       countAlive(enemies) === 2 && remainEnemyCount() === 5,
+       'alive=' + countAlive(enemies) + ' remain=' + remainEnemyCount());
+enemies = savedEnemies; enemyQueue = savedQueue;
 `;
 
 let err = null;
