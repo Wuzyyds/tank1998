@@ -224,7 +224,7 @@
     <h2>双人合作闯关</h2>
     <p class="coop-hint">
       同一 WiFi：让好友打开 <b id="coop-lan">…</b><br>
-      跨网络：把本机 8080 端口映射到公网，再让好友用你的公网 IP 访问。
+      跨网络：把本机端口部署/映射到公网后，把地址发给好友（HTTPS 页面会自动走 wss）。
     </p>
     <div class="coop-row">
       <input id="room-code" maxlength="4" placeholder="房间号" autocomplete="off" />
@@ -234,6 +234,15 @@
       <button id="btn-create">创建房间</button>
       <button id="btn-coop-close">关闭</button>
     </div>
+    <!-- 进阶：页面与中继不在同一地址时（静态托管 + 独立中继）在此指定中继 -->
+    <details id="relay-panel">
+      <summary>中继地址（进阶，默认同源）</summary>
+      <p class="coop-hint">当前：<b id="relay-now">…</b></p>
+      <div class="coop-row relay">
+        <input id="relay-url" placeholder="wss://relay.example.com:9000/ws" autocomplete="off" />
+        <button id="btn-relay">应用</button>
+      </div>
+    </details>
     <div id="coop-code-display" class="coop-code-display"></div>
     <div id="coop-status" class="coop-status"></div>
   </div>

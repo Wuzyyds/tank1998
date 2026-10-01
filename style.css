@@ -130,6 +130,15 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
 @media (pointer:coarse){ .codex-box { width:96vw; } .codex-tab { padding:10px 16px; font-size:15px; } }
 
 .coop-status { color:#FFD23F; font-size:13px; text-align:center; min-height:18px; line-height:1.5; }
+/* 中继地址（进阶折叠区）：与房间号输入框区分——不放大写、不加字距 */
+#relay-panel { margin-top:4px; }
+#relay-panel summary { color:#8b949e; font-size:12px; cursor:pointer; list-style:none; padding:4px 0; }
+#relay-panel summary::-webkit-details-marker { display:none; }
+#relay-panel summary::before { content:'▸ '; }
+#relay-panel[open] summary::before { content:'▾ '; }
+#relay-panel .coop-hint { margin:8px 0; }
+.coop-row.relay input { letter-spacing:0; text-transform:none; font-size:12.5px; text-align:left; padding:8px 10px; }
+.coop-row.relay button { font-size:13px; padding:8px 12px; }
 /* 无障碍：系统开启「减少动效」时关闭 CSS 过渡动画（配合 game.js 的闪烁降频） */
 @media (prefers-reduced-motion: reduce){
   #joy-knob { transition:none; }

@@ -1,12 +1,17 @@
 /* =========================================================
  * 双人合作：网络层集成测试 + 同步逻辑单元测试
+ *   - 静态：顶层重名函数（函数提升会静默覆盖）
  *   - 集成：启动 server.js，验证 握手/创建/加入/输入中继/快照中继/掉线
+ *           + 公网化（健康检查 / 缓存策略 / HEAD / 405 / 保活 ping / Origin 白名单）
  *   - 单元：快照往返含 player2、输入打包对称、玩家集合/命数、友伤关闭
+ *   - 单元：net.js 重连状态机 + 中继地址解析（同源 / 自定义 / https 补 wss）
  * 运行：node tests/net_test.js
  * ========================================================= */
 'use strict';
 const fs = require('fs');
 const vm = require('vm');
+const http = require('http');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const path = require('path');
 
@@ -19,10 +24,10 @@ const assert = (name, ok, extra) => {
 };
 
 /* ---------- 集成：启动服务器 ---------- */
-function startServer() {
+function startServerOn(port, extraEnv) {
   return new Promise((resolve, reject) => {
     const srv = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-      env: Object.assign({}, process.env, { PORT: String(PORT) }),
+      env: Object.assign({}, process.env, extraEnv, { PORT: String(port) }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -31,6 +36,46 @@ function startServer() {
     srv.stderr.on('data', onData);
     srv.on('error', reject);
     setTimeout(() => resolve(srv), 1200); // 兜底：即使没捕获到日志也继续
+  });
+}
+// 主服务器把保活间隔调小，便于在测试里观察到 ping 帧
+function startServer() { return startServerOn(PORT, { WS_PING_MS: '300' }); }
+
+/* ---------- 集成：裸 WS 握手 ----------
+ * 浏览器 WebSocket API 不暴露 ping 帧，也无法自定义 Origin，
+ * 因此用 http.request 手动发起升级，拿到升级后的裸 socket 观察协议帧。 */
+function rawUpgrade(port, origin) {
+  return new Promise(resolve => {
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/ws',
+      headers: Object.assign({
+        'Connection': 'Upgrade',
+        'Upgrade': 'websocket',
+        'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64'),
+        'Sec-WebSocket-Version': '13',
+      }, origin ? { 'Origin': origin } : {}),
+    });
+    let done = false;
+    const finish = v => { if (!done) { done = true; resolve(v); } };
+    req.on('upgrade', (res, socket, head) => finish({ ok: true, socket, head }));
+    req.on('response', res => finish({ ok: false, status: res.statusCode }));
+    req.on('error', e => finish({ ok: false, error: e.message }));
+    setTimeout(() => finish({ ok: null, error: 'timeout' }), 1500);
+    req.end();
+  });
+}
+
+/* 观察服务端是否主动发来 ping 帧（opcode 0x9） */
+async function rawPingCheck() {
+  const up = await rawUpgrade(PORT);
+  if (!up.ok) return 'upgrade failed: ' + (up.error || up.status);
+  const isPing = b => b && b.length >= 1 && (b[0] & 0x0f) === 0x9;
+  return await new Promise(resolve => {
+    const t = setTimeout(() => { try { up.socket.destroy(); } catch (e) {} resolve(false); }, 2000);
+    if (isPing(up.head)) { clearTimeout(t); up.socket.destroy(); return resolve(true); }
+    up.socket.on('data', chunk => {
+      if (isPing(chunk)) { clearTimeout(t); up.socket.destroy(); resolve(true); }
+    });
   });
 }
 
@@ -111,11 +156,59 @@ async function integration() {
     const swRes = await fetch('http://127.0.0.1:' + PORT + '/sw.js');
     assert('Service Worker 可访问', swRes.status === 200 && (swRes.headers.get('content-type') || '').indexOf('javascript') >= 0, swRes.status);
 
+    // 公网化：健康检查 / 缓存策略 / 方法限制 / 保活 / Origin 白名单
+    const hzRes = await fetch('http://127.0.0.1:' + PORT + '/healthz');
+    const hzJson = await hzRes.json();
+    assert('/healthz 返回 ok + uptime + 房间数 + 连接数',
+      hzRes.status === 200 && hzJson.ok === true && typeof hzJson.uptimeMs === 'number' &&
+      typeof hzJson.rooms === 'number' && typeof hzJson.connections === 'number',
+      JSON.stringify(hzJson));
+
+    const ccOf = r => (r.headers.get('cache-control') || '');
+    const rootRes = await fetch('http://127.0.0.1:' + PORT + '/');
+    assert('入口 HTML / Service Worker / 清单均为 no-cache（发版不被旧缓存卡住）',
+      ccOf(rootRes) === 'no-cache' && ccOf(swRes) === 'no-cache' && ccOf(mRes) === 'no-cache',
+      JSON.stringify({ html: ccOf(rootRes), sw: ccOf(swRes), man: ccOf(mRes) }));
+    assert('静态资源短缓存 + nosniff + Content-Length',
+      ccOf(iRes).indexOf('max-age=') >= 0 && iRes.headers.get('x-content-type-options') === 'nosniff' &&
+      Number(iRes.headers.get('content-length')) > 0,
+      JSON.stringify({ cc: ccOf(iRes), len: iRes.headers.get('content-length') }));
+
+    const headRes = await fetch('http://127.0.0.1:' + PORT + '/', { method: 'HEAD' });
+    const headBody = await headRes.text();
+    assert('HEAD / 返回 200 + Content-Length 且无响应体',
+      headRes.status === 200 && Number(headRes.headers.get('content-length')) > 0 && headBody.length === 0,
+      JSON.stringify({ status: headRes.status, len: headRes.headers.get('content-length'), body: headBody.length }));
+
+    const postRes = await fetch('http://127.0.0.1:' + PORT + '/', { method: 'POST' });
+    assert('非 GET/HEAD 返回 405 并声明 Allow',
+      postRes.status === 405 && /\bGET\b/.test(postRes.headers.get('allow') || ''),
+      postRes.status + ' allow=' + postRes.headers.get('allow'));
+
+    assert('服务端定期发送 WebSocket ping 保活帧（防反代/NAT 掐空闲连接）',
+      (await rawPingCheck()) === true);
+
+    // Origin 白名单：单独起一个设了 ALLOW_ORIGIN 的实例
+    const PORT2 = PORT + 1;
+    const srv2 = await startServerOn(PORT2, { ALLOW_ORIGIN: 'http://allowed.example' });
+    try {
+      const evil = await rawUpgrade(PORT2, 'http://evil.example');
+      assert('ALLOW_ORIGIN：非白名单来源的 WS 握手被拒绝',
+        evil.ok !== true, String(evil.error || evil.status || ''));
+      const good = await rawUpgrade(PORT2, 'http://allowed.example');
+      assert('ALLOW_ORIGIN：白名单来源可正常升级', good.ok === true, String(good.error || good.status || ''));
+      if (good.socket) { try { good.socket.destroy(); } catch (e) {} }
+      const noOrigin = await rawUpgrade(PORT2);
+      assert('ALLOW_ORIGIN：无 Origin（非浏览器客户端）放行', noOrigin.ok === true, String(noOrigin.error || noOrigin.status || ''));
+      if (noOrigin.socket) { try { noOrigin.socket.destroy(); } catch (e) {} }
+    } finally { srv2.kill(); }
+
     // 页面结构：设置面板（分项音量）与手机端 HUD 的武器栏必须存在，否则静默失效
     const html = await (await fetch('http://127.0.0.1:' + PORT + '/')).text();
-    const need = ['id="set-panel"', 'id="btn-set"', 'id="vol-master"', 'id="vol-sfx"', 'id="vol-music"', 'id="chk-bgm"', 'id="hud-weapon"'];
+    const need = ['id="set-panel"', 'id="btn-set"', 'id="vol-master"', 'id="vol-sfx"', 'id="vol-music"', 'id="chk-bgm"', 'id="hud-weapon"',
+                  'id="relay-url"', 'id="btn-relay"', 'id="relay-now"', 'id="coop-lan"'];
     const missing = need.filter(s => html.indexOf(s) < 0);
-    assert('index.html 含设置面板与 HUD 武器栏（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
+    assert('index.html 含设置面板 / HUD 武器栏 / 中继面板（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
 
     // 掉线通知：关闭客方，房主应收到 peer.dropped
     const dropP = waitMsg(H, m => m.type === 'peer' && m.event === 'dropped', 3000);
@@ -151,6 +244,59 @@ async function integration() {
   } finally {
     srv.kill();
   }
+}
+
+/* ---------- 静态检查：顶层重名函数 ----------
+ * server.js 曾同时存在 HTTP 版与 WebSocket 版的 sendJson：函数声明会提升、
+ * 后声明的静默覆盖先声明的，导致 HTTP 响应永不 end()，请求一直挂着。
+ * 这里用最朴素的文本扫描把同类问题挡在提交之前。 */
+function staticChecks() {
+  console.log('\n=== 静态检查：顶层重名函数 ===');
+  const report = {};
+  let clean = true;
+  for (const f of ['server.js', 'game.js']) {
+    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const re = /^function\s+([A-Za-z_$][\w$]*)/gm;
+    const seen = Object.create(null);
+    const dup = [];
+    let m;
+    while ((m = re.exec(src))) { if (seen[m[1]]) dup.push(m[1]); seen[m[1]] = 1; }
+    if (dup.length) clean = false;
+    report[f] = dup;
+  }
+  assert('server.js / game.js 无顶层重名函数（重名会被静默覆盖）', clean, JSON.stringify(report));
+}
+
+/* ---------- CLI 配置校验 ----------
+ * TLS 是公网上线的主路径：半配置（只给证书不给私钥）必须在启动时就明确报错，
+ * 而不是静默降级成明文 http —— 那会让部署者误以为已经在用 HTTPS。 */
+function runCli(args, timeout = 5000) {
+  return new Promise(resolve => {
+    const p = spawn(process.execPath, [path.join(ROOT, 'server.js')].concat(args), {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '', err = '';
+    p.stdout.on('data', d => { out += d.toString(); });
+    p.stderr.on('data', d => { err += d.toString(); });
+    const t = setTimeout(() => { try { p.kill(); } catch (e) {} resolve({ code: null, out, err }); }, timeout);
+    p.on('exit', code => { clearTimeout(t); resolve({ code, out, err }); });
+  });
+}
+
+async function cliChecks() {
+  console.log('\n=== CLI：TLS / 帮助 配置校验 ===');
+  const help = await runCli(['--help']);
+  assert('--help 退出码 0 且打印用法', help.code === 0 && help.out.indexOf('用法') >= 0, 'code=' + help.code);
+
+  const half = await runCli(['--tls-cert', 'x.pem', '--port', '8123']);
+  assert('只给证书不给私钥时拒绝启动（不静默降级为明文）',
+    half.code === 1 && half.err.indexOf('证书与私钥必须同时提供') >= 0,
+    'code=' + half.code + ' err=' + half.err.trim());
+
+  const missing = await runCli(['--tls-cert', '_no_cert.pem', '--tls-key', '_no_key.pem', '--port', '8123']);
+  assert('证书文件不存在时报错并退出',
+    missing.code === 1 && missing.err.indexOf('读取证书') >= 0,
+    'code=' + missing.code + ' err=' + missing.err.trim());
 }
 
 /* ---------- 单元：在 vm 沙箱中加载 game.js 测同步逻辑 ---------- */
@@ -358,9 +504,15 @@ function netUnit() {
     send(s) { this.sent.push(JSON.parse(s)); }
     close() { this.readyState = 3; if (this.onclose) this.onclose(); }
   }
+  const store = {};
   const sandbox = {
     console, WebSocket: FakeWS,
     location: { protocol: 'http:', host: 'localhost:8080' },
+    localStorage: {
+      getItem: k => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); },
+      removeItem: k => { delete store[k]; },
+    },
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
     clearTimeout: id => { if (id) timers[id - 1] = null; },
   };
@@ -376,6 +528,7 @@ function netUnit() {
 
   ctx.Net.connect('host');
   assert('connect 后建立 WebSocket 连接', !!lastWS);
+  assert('默认中继地址为同源 /ws', lastWS.url === 'ws://localhost:8080/ws', lastWS.url);
   lastWS.readyState = 1; lastWS.onopen();
   assert('首次连接触发 onOpen（发送 create）', opened === 1 && lastWS.sent.some(m => m.action === 'create'));
 
@@ -397,9 +550,46 @@ function netUnit() {
   const before = seen.length;
   ctx.Net.disconnect();
   assert('主动 disconnect 不触发重连', !seen.slice(before).some(m => m.type === 'net' && m.event === 'offline'));
+
+  /* 中继地址可配置：页面托管在静态站点、游戏服务在另一台机器时依赖它 */
+  const nr = ctx.Net._normalizeRelay;
+  assert('relay 规范化：裸 host:port 自动补协议与 /ws',
+    nr('relay.example.com:9000') === 'ws://relay.example.com:9000/ws', nr('relay.example.com:9000'));
+  assert('relay 规范化：保留显式 wss 与自定义路径',
+    nr('wss://relay.example.com/relay') === 'wss://relay.example.com/relay', nr('wss://relay.example.com/relay'));
+  assert('relay 规范化：末尾裸斜杠补成 /ws',
+    nr('192.168.1.7:8080/') === 'ws://192.168.1.7:8080/ws', nr('192.168.1.7:8080/'));
+  assert('relay 规范化：非 ws/wss 协议被拒绝（返回空串）',
+    nr('http://evil.example/x') === '' && nr('https://evil.example') === '', nr('http://evil.example/x'));
+  assert('relay 规范化：空串与纯空白返回空串', nr('') === '' && nr('   ') === '', '_');
+
+  // https 页面必须自动改用 wss，否则浏览器按混合内容直接拒绝连接
+  sandbox.location.protocol = 'https:';
+  assert('relay 规范化：https 页面裸 host 自动补 wss',
+    nr('relay.example.com:9000') === 'wss://relay.example.com:9000/ws', nr('relay.example.com:9000'));
+  sandbox.location.protocol = 'http:';
+
+  assert('setRelay 写入后 _url 走自定义中继',
+    ctx.Net.setRelay('relay.local:9000') === 'ws://relay.local:9000/ws' &&
+    ctx.Net.relayUrl() === 'ws://relay.local:9000/ws', ctx.Net.relayUrl());
+  assert('setRelay 传空串即清除，回到同源 /ws',
+    ctx.Net.setRelay('') === '' && ctx.Net.relayUrl() === 'ws://localhost:8080/ws', ctx.Net.relayUrl());
+
+  // ?relay= 查询参数优先于 localStorage 记住的地址
+  ctx.Net.setRelay('stored.local:1111');
+  sandbox.location.search = '?relay=' + encodeURIComponent('wss://from-query.example/ws');
+  assert('?relay= 查询参数优先于已记住的地址',
+    ctx.Net.relayUrl() === 'wss://from-query.example/ws', ctx.Net.relayUrl());
+  sandbox.location.search = '?relay=' + encodeURIComponent('http://bad.example');
+  assert('?relay= 非法协议时回退到已记住的地址',
+    ctx.Net.relayUrl() === 'ws://stored.local:1111/ws', ctx.Net.relayUrl());
+  sandbox.location.search = '';
+  ctx.Net.setRelay('');
 }
 
 (async () => {
+  staticChecks();
+  await cliChecks();
   await integration();
   unit();
   netUnit();

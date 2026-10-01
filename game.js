@@ -2969,7 +2969,7 @@ function coopInit(){
   const btnCoop = coopEl('btn-coop');
   const overlay = coopEl('coop-overlay');
   if (btnCoop && overlay){
-    btnCoop.addEventListener('click', () => { initAudio(); overlay.classList.add('show'); coopRefreshLan(); });
+    btnCoop.addEventListener('click', () => { initAudio(); overlay.classList.add('show'); coopRefreshLan(); coopRefreshRelay(); });
   }
   const btnClose = coopEl('btn-coop-close');
   if (btnClose) btnClose.addEventListener('click', () => {
@@ -2987,24 +2987,52 @@ function coopInit(){
     if (netMode !== 'off') coopReset();
     netMode = 'guest'; coopRoomCode = code; coopSetStatus('连接中…'); Net.connect('guest', code);
   });
+
+  /* 中继地址（进阶）：页面托管在静态站点、游戏服务在另一台机器时使用。
+   * 写入 localStorage，下次 connect() 生效；清空即恢复同源 /ws。 */
+  const btnRelay = coopEl('btn-relay');
+  if (btnRelay) btnRelay.addEventListener('click', () => {
+    const raw = (coopEl('relay-url').value || '').trim();
+    const applied = (typeof Net.setRelay === 'function') ? Net.setRelay(raw) : '';
+    coopRefreshRelay();
+    if (raw && !applied){ coopSetStatus('中继地址无效：需要 ws:// 或 wss:// 地址'); return; }
+    coopSetStatus(raw ? ('中继已设为 ' + applied + '，下次连接生效') : '已恢复为同源中继');
+  });
+}
+
+/* 显示当前生效的中继地址（自定义优先，否则同源 /ws） */
+function coopRefreshRelay(){
+  const el = coopEl('relay-now');
+  if (!el) return;
+  const now = (typeof Net !== 'undefined' && typeof Net.relayUrl === 'function') ? Net.relayUrl() : '';
+  el.textContent = now || '同源';
 }
 
 function coopRefreshLan(){
   const el = coopEl('coop-lan');
   if (!el) return;
   el.textContent = '正在检测局域网地址…';
-  getLanIP().then(ip => { el.textContent = ip ? ('http://' + ip + ':8080') : '（未检测到可用局域网 IP，请在系统设置中查看）'; })
-             .catch(() => { el.textContent = '（未检测到可用局域网 IP，请在系统设置中查看）'; });
+  const fallback = () => {
+    el.textContent = (typeof location !== 'undefined' && location.host)
+      ? (location.origin + '（静态托管：跨网请在下方填写中继地址）')
+      : '（未检测到可用局域网 IP，请在系统设置中查看）';
+  };
+  getLanInfo().then(info => {
+    // server 的 /lan 会带上实际端口与协议（含 HTTPS 部署），不再硬编码 8080
+    if (info && info.url) el.textContent = info.url;
+    else fallback();
+  }).catch(fallback);
 }
 
-/* 局域网 IP 优先由 server 的 /lan 端点给出：
+/* 局域网地址优先由 server 的 /lan 端点给出：
  * server 侧能读取本机所有网卡，过滤掉 169.254.x.x（APIPA）与虚拟网卡，
- * 这比浏览器 WebRTC ICE 更可靠，避免像 169.254.83.59 这种不可达地址。 */
-function getLanIP(){
+ * 这比浏览器 WebRTC ICE 更可靠，避免像 169.254.83.59 这种不可达地址。
+ * 纯静态托管时没有该端点（404 或网络错误），调用方自行回退。 */
+function getLanInfo(){
   return fetch('/lan')
     .then(r => r.ok ? r.json() : null)
-    .then(j => (j && j.ip && typeof j.ip === 'string') ? j.ip : '')
-    .catch(() => '');
+    .then(j => (j && typeof j === 'object') ? j : null)
+    .catch(() => null);
 }
 
 /* ================= 输入 ================= */

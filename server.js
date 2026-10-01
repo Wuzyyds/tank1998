@@ -1,22 +1,80 @@
 /* =========================================================
- * TANK 1998 · 双人合作 —— 本地中继服务器（零依赖）
+ * TANK 1998 · 双人合作 —— 中继服务器（零依赖）
  * 同一端口既托管静态游戏文件，又提供 WebSocket 中继 (/ws)。
  *   - 同一 WiFi/局域网：两设备打开 http://<本机局域网IP>:<PORT>
- *   - 跨互联网：把本端口映射/部署到公网，把地址发给朋友
+ *   - 跨互联网（单进程）：加 --tls-cert/--tls-key 直接跑 https + wss
+ *   - 跨互联网（反代）：明文跑本服务，前面套 Caddy/Nginx 终止 TLS
  *   - 房间号：4 位易读码，容量 2，纯中继（服务器不跑任何游戏逻辑）
- * 运行：node server.js  （可选 --port 9000 或环境变量 PORT）
+ *
+ * 运行：node server.js
+ *   --port <n>            监听端口（默认 8080，也可用环境变量 PORT）
+ *   --host <addr>         绑定地址（默认 0.0.0.0）
+ *   --tls-cert <pem>      TLS 证书链；与 --tls-key 同时提供时启用 https/wss
+ *   --tls-key  <pem>      TLS 私钥（可用 TLS_CERT / TLS_KEY 环境变量代替）
+ *   --allow-origin <list> 逗号分隔的 Origin 白名单（防公网中继被盗用；留空不校验）
+ *   --help                打印用法
  * ========================================================= */
 'use strict';
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
 const ROOT = __dirname;
-const PORT = Number(process.env.PORT) || (process.argv.includes('--port')
-  ? Number(process.argv[process.argv.indexOf('--port') + 1]) : 8080);
 const RECONNECT_WINDOW = 20000;   // 掉线后保留房间与重连令牌的时长（毫秒）
 const ROOM_CAP = 2;
+const WS_PING_MS = Number(process.env.WS_PING_MS) || 30000;   // 保活 ping 间隔（可调，便于测试）
+
+/* 取 --flag value 形式的命令行参数 */
+function argValue(flag){
+  const i = process.argv.indexOf(flag);
+  return (i >= 0 && i + 1 < process.argv.length) ? process.argv[i + 1] : null;
+}
+const HELP = process.argv.includes('--help') || process.argv.includes('-h');
+
+const PORT = Number(process.env.PORT) || Number(argValue('--port')) || 8080;
+const HOST = process.env.HOST || argValue('--host') || '0.0.0.0';
+const ALLOW_ORIGIN = (process.env.ALLOW_ORIGIN || argValue('--allow-origin') || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const CERT_PATH = process.env.TLS_CERT || argValue('--tls-cert');
+const KEY_PATH  = process.env.TLS_KEY  || argValue('--tls-key');
+
+if (HELP){
+  console.log([
+    'TANK 1998 双人服务器',
+    '',
+    '用法：node server.js [选项]',
+    '',
+    '  --port <n>            监听端口（默认 8080，也可用环境变量 PORT）',
+    '  --host <addr>         绑定地址（默认 0.0.0.0）',
+    '  --tls-cert <pem>      TLS 证书链，配合 --tls-key 启用 https + wss',
+    '  --tls-key  <pem>      TLS 私钥（也可用 TLS_CERT / TLS_KEY 环境变量）',
+    '  --allow-origin <list> 逗号分隔 Origin 白名单，留空则不做校验',
+    '  --help, -h            显示本帮助',
+    '',
+    '示例：',
+    '  node server.js                                 局域网，明文 http',
+    '  node server.js --port 9000                     换端口',
+    '  node server.js --tls-cert cert.pem --tls-key key.pem   公网 https/wss',
+    '  ALLOW_ORIGIN=https://game.example.com node server.js   限制可连中继的来源',
+  ].join('\n'));
+  process.exit(0);
+}
+
+let tlsOpts = null;
+if (CERT_PATH || KEY_PATH){
+  if (!(CERT_PATH && KEY_PATH)){
+    console.error('[TLS] 证书与私钥必须同时提供：--tls-cert <cert.pem> --tls-key <key.pem>');
+    process.exit(1);
+  }
+  try {
+    tlsOpts = { cert: fs.readFileSync(CERT_PATH), key: fs.readFileSync(KEY_PATH) };
+  } catch (e) {
+    console.error('[TLS] 读取证书/私钥失败：' + e.message);
+    process.exit(1);
+  }
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -41,14 +99,57 @@ function safeJoin(root, urlPath){
   if (!p.startsWith(root)) return null;   // 防目录穿越
   return p;
 }
-const server = http.createServer((req, res) => {
-  let urlPath = decodeURIComponent(req.url.split('?')[0]);
+
+const SCHEME = tlsOpts ? 'https' : 'http';
+const WS_SCHEME = tlsOpts ? 'wss' : 'ws';
+const WS_PATH = '/ws';
+const startedAt = Date.now();
+let wsCount = 0;                    // 当前 WebSocket 连接数（/healthz 用）
+
+/* Service Worker 与入口 HTML 必须实时刷新（否则发版后用户卡在旧版本），
+ * 其余静态资源给一小时缓存；sw.js 的缓存版本号负责清理旧资源。 */
+function cacheControlFor(ext, base){
+  if (base === 'sw.js' || ext === '.html' || ext === '.webmanifest') return 'no-cache';
+  return 'public, max-age=3600';
+}
+/* 注意：本文件后面还有一个同名的 WebSocket 版发送函数（sendJson(sock,obj)）。
+ * 函数声明会提升且后者覆盖前者，所以 HTTP 响应这条路径必须用独立名字，
+ * 否则响应永远不会 end()，请求会一直挂着（曾经真实踩过这个坑）。 */
+function sendJsonRes(res, obj, status){
+  const body = Buffer.from(JSON.stringify(obj), 'utf8');
+  res.writeHead(status || 200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': body.length,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.end(body);
+}
+
+function handleRequest(req, res){
+  if (req.method !== 'GET' && req.method !== 'HEAD'){
+    res.writeHead(405, { 'Allow': 'GET, HEAD' }); res.end(); return;
+  }
+  let urlPath;
+  try { urlPath = decodeURIComponent((req.url || '/').split('?')[0]); }
+  catch (e) { res.writeHead(400); res.end('bad request'); return; }
+
+  // 存活探测：供负载均衡 / systemd / 监控使用
+  if (urlPath === '/healthz'){
+    sendJsonRes(res, {
+      ok: true, tls: !!tlsOpts, port: PORT,
+      uptimeMs: Date.now() - startedAt,
+      rooms: rooms.size, connections: wsCount,
+    });
+    return;
+  }
   // 客户端获取推荐局域网地址
   if (urlPath === '/lan'){
     const lan = pickLanIP();
-    const body = JSON.stringify({ ip: lan.ip, port: PORT, url: lan.ip ? ('http://' + lan.ip + ':' + PORT) : null });
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(body);
+    sendJsonRes(res, {
+      ip: lan.ip, port: PORT, tls: !!tlsOpts,
+      url: lan.ip ? (SCHEME + '://' + lan.ip + ':' + PORT) : null,
+    });
     return;
   }
   if (urlPath === '/' || urlPath === '') urlPath = '/index.html';
@@ -57,10 +158,19 @@ const server = http.createServer((req, res) => {
   fs.readFile(filePath, (err, buf) => {
     if (err){ res.writeHead(404); res.end('not found'); return; }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-    res.end(buf);
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Content-Length': buf.length,
+      'Cache-Control': cacheControlFor(ext, path.basename(filePath)),
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(req.method === 'HEAD' ? undefined : buf);
   });
-});
+}
+
+const server = tlsOpts
+  ? https.createServer(tlsOpts, handleRequest)
+  : http.createServer(handleRequest);
 
 /* ============ 房间管理 ============ */
 const rooms = new Map();   // code -> { host, guest, started, timer }
@@ -110,7 +220,12 @@ function acceptKey(key){
 }
 server.on('upgrade', (req, socket) => {
   const url = req.url || '';
-  if (url.split('?')[0] !== '/ws'){ socket.destroy(); return; }
+  if (url.split('?')[0] !== WS_PATH){ socket.destroy(); return; }
+  // 公网部署时可限制来源，避免中继被第三方页面白嫖（非浏览器客户端不带 Origin，放行）
+  if (ALLOW_ORIGIN.length){
+    const origin = String(req.headers.origin || '');
+    if (origin && ALLOW_ORIGIN.indexOf(origin) === -1){ socket.destroy(); return; }
+  }
   const key = req.headers['sec-websocket-key'];
   if (!key){ socket.destroy(); return; }
   const headers = [
@@ -130,6 +245,14 @@ server.on('upgrade', (req, socket) => {
 function attachWs(socket){
   socket.role = null; socket.room = null; socket.buf = Buffer.alloc(0); socket.frags = [];
   socket._curOpcode = 0x1;
+  wsCount++;
+  /* 保活：定期发 ping 帧。浏览器会自动回 pong（RFC 6455 规定），
+   * 既探测死连接，也避免反向代理 / NAT 把空闲长连接回收掉。 */
+  socket._pingTimer = setInterval(() => {
+    if (socket.destroyed || !socket.writable) return;
+    try { sendRaw(socket, 0x9, Buffer.alloc(0)); } catch (e) {}
+  }, WS_PING_MS);
+  if (socket._pingTimer.unref) socket._pingTimer.unref();
 
   socket.on('data', chunk => {
     socket.buf = Buffer.concat([socket.buf, chunk]);
@@ -286,6 +409,8 @@ function leaveRoom(socket){
 function onSocketClose(socket){
   if (socket._closed) return;          // 防止 end/close/error 重复触发
   socket._closed = true;
+  if (socket._pingTimer){ clearInterval(socket._pingTimer); socket._pingTimer = null; }
+  wsCount = Math.max(0, wsCount - 1);
   const code = socket.room, role = socket.role;
   const room = code ? rooms.get(code) : null;
   if (room && role){
@@ -347,16 +472,41 @@ function pickLanIP(){
 }
 
 /* ============ 启动 ============ */
-server.listen(PORT, '0.0.0.0', () => {
+server.on('error', (e) => {
+  if (e && e.code === 'EADDRINUSE') console.error('[启动失败] 端口 ' + PORT + ' 已被占用，换一个：node server.js --port 9001');
+  else if (e && e.code === 'EACCES') console.error('[启动失败] 无权绑定端口 ' + PORT + '（1024 以下端口通常需要管理员/root）');
+  else console.error('[启动失败] ' + (e && e.message ? e.message : e));
+  process.exit(1);
+});
+
+server.listen(PORT, HOST, () => {
   const lan = pickLanIP();
-  console.log('TANK 1998 双人服务器已启动');
-  console.log('  本机：  http://localhost:' + PORT);
-  if (lan.ip) console.log('  局域网：http://' + lan.ip + ':' + PORT + '  （同 WiFi 设备用此地址）');
+  console.log('TANK 1998 双人服务器已启动' + (tlsOpts ? '（HTTPS / wss）' : '（HTTP / ws）'));
+  console.log('  本机：  ' + SCHEME + '://localhost:' + PORT);
+  if (lan.ip) console.log('  局域网：' + SCHEME + '://' + lan.ip + ':' + PORT + '  （同 WiFi 设备用此地址）');
   else console.log('  未检测到可用局域网 IPv4，请在系统设置中手动查看本机 IP');
   if (lan.all.length > 1){
     const others = lan.all.filter(x => x.ip !== lan.ip).map(x => x.ip + (x.score >= 100 ? '' : '[公网/特殊]')).join(', ');
     console.log('  其他候选：' + others);
   }
+  console.log('  健康检查：' + SCHEME + '://localhost:' + PORT + '/healthz');
+  if (ALLOW_ORIGIN.length) console.log('  允许来源：' + ALLOW_ORIGIN.join(', '));
   console.log('  双人：打开页面 → 双人游戏 → 创建/加入房间');
-  console.log('  跨互联网：把上述端口在路由器/云主机映射后，把地址发给朋友');
+  if (tlsOpts) console.log('  公网：把地址发给朋友即可（已启用 wss，HTTPS 页面可直接连）');
+  else console.log('  公网：建议加 --tls-cert/--tls-key 直跑 HTTPS，或在前端套 Caddy/Nginx 终止 TLS');
 });
+
+/* 优雅关闭：给容器编排 / systemd 一个干净的退出路径 */
+let closing = false;
+function shutdown(sig){
+  if (closing) return;
+  closing = true;
+  console.log('\n收到 ' + sig + '，正在关闭…');
+  for (const [, room] of rooms){
+    for (const k of ['hostTimer', 'guestTimer', 'timer']) if (room[k]) clearTimeout(room[k]);
+  }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();   // 兜底：连接没断干净也退出
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
