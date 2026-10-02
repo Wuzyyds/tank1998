@@ -63,7 +63,7 @@ const sandbox = {
     querySelectorAll: () => [],
     addEventListener: noop,
     createElement: () => ({ width: 0, height: 0, getContext: () => ctxStub }),
-    body: mkEl('body'), fullscreenElement: null, hidden: false,
+    body: mkEl('body'), documentElement: mkEl('html'), fullscreenElement: null, hidden: false,
   },
   localStorage: { getItem: () => '0', setItem: noop, removeItem: noop },
   performance: { now: () => sandbox.vnow },
@@ -200,9 +200,13 @@ assert('F2 玩家出生星星已生成', fx0 >= 1, 'spawn fx=' + fx0);
 /* ---------- G. 手机/触屏开始游戏（无键盘） ---------- */
 const fire = (el, type) => { (el.__h[type] || []).forEach(f => f({ preventDefault(){} })); };
 const cvs  = document.getElementById('game');
-const btnS = document.getElementById('btn-start');
-assert('G0 画布与开始按钮均已注册事件',
-       !!cvs && (cvs.__h.pointerdown || []).length >= 1 && !!btnS && (btnS.__h.click || []).length >= 1);
+/* 顶部工具栏已整条从页面移除，入口改为画面内菜单（#center-actions / #play-ctl） */
+const btnS = document.getElementById('ca-start');
+const ctlP = document.getElementById('ctl-pause');
+assert('G0 画布、画面内「开始游戏」与对局中「暂停」键均已注册事件',
+       !!cvs && (cvs.__h.pointerdown || []).length >= 1 &&
+       !!btnS && (btnS.__h.click || []).length >= 1 &&
+       !!ctlP && (ctlP.__h.click || []).length >= 1);
 
 state = 'title'; startLockT = gameTime - 1;
 fire(cvs, 'pointerdown');
@@ -223,15 +227,13 @@ assert('G4 过关后点按画布进入下一关', state === 'playing' && level =
 
 state = 'title'; startLockT = gameTime - 1;
 fire(btnS, 'click');
-assert('G5 工具栏“开始游戏”按钮可用', state === 'playing', 'state=' + state);
+assert('G5 画面内菜单「开始游戏」按钮可用', state === 'playing', 'state=' + state);
 
-state = 'title'; syncStartBtn(); const t1 = btnS.textContent;
-state = 'over';  syncStartBtn(); const t2 = btnS.textContent;
-state = 'clear'; syncStartBtn(); const t3 = btnS.textContent;
-state = 'playing'; syncStartBtn(); const dis3 = btnS.disabled;
-assert('G6 开始按钮文案随状态切换、游戏中禁用',
-       /开始/.test(t1) && /重新/.test(t2) && /下一关/.test(t3) && dis3 === true,
-       [t1, t2, t3, 'disabled=' + dis3].join(' | '));
+/* G6 原先顶部工具栏的全部功能都已搬进画面内菜单，并各自绑好点击处理 */
+const caMenu = ['ca-start','ca-coop','ca-codex','ca-set','ca-mute','ca-restart','ca-title','ca-next','ca-resume'];
+const caMiss = caMenu.filter(id => (((document.getElementById(id).__h || {}).click) || []).length < 1);
+assert('G6 画面内菜单按钮全部接好点击处理（开始/双人/图鉴/设置/音效/重开/返回/下一关/继续）',
+       caMiss.length === 0, 'missing=' + caMiss.join(','));
 
 state = 'playing'; const lvNow = level; startLockT = gameTime - 1;
 fire(cvs, 'pointerdown');
@@ -425,13 +427,13 @@ codexSwitchTab('rule');
 assert('L2 再切到「机制」：只 rule 激活',
        cxPanes.find(p=>p._n==='rule')._active && !cxPanes.find(p=>p._n==='enemy')._active,
        JSON.stringify(cxPanes.map(p=>p._n+':'+p._active)));
-// 按钮点击应显示覆盖层
-const cxBtn = document.getElementById('btn-codex');
+// 按钮点击应显示覆盖层（入口已从页面工具栏搬到画面内菜单）
+const cxBtn = document.getElementById('ca-codex');
 let cxShown = false;
 codexOv.classList = { toggle:(c,on)=>{ if(c==='show') cxShown = !!on; }, add:NO, remove:NO, contains:()=>false };
 const cxClick = (cxBtn.__h && cxBtn.__h.click) || [];
 if (cxClick.length) cxClick[0]();
-assert('L3 点击「图鉴」按钮显示覆盖层', cxShown === true, 'handlers=' + cxClick.length);
+assert('L3 点击画面内「图鉴」按钮显示覆盖层', cxShown === true, 'handlers=' + cxClick.length);
 
 /* ---------- M. 渲染性能：逐格重绘 → 精灵化（回归守卫） ----------
  * 老鹰/树/水原先每帧逐格重绘（老鹰最多 400 次 fillRect），
@@ -613,20 +615,26 @@ assert('Q3 自适应画质：吃力时 DPR 逐档降（2→1.5→1），流畅�
 function qDisp(id){ const el = document.getElementById(id); return (el && el.style) ? el.style.display : '?'; }
 function qSync(st, pz){ state = st; paused = !!pz; caStateKey = ''; syncCenterActions(); }
 qSync('title', false);
-const qA1 = qDisp('ca-start'), qA2 = qDisp('ca-restart');
+const qA1 = qDisp('ca-start'), qA2 = qDisp('ca-restart'), qA3 = qDisp('ca-coop'),
+      qA4 = qDisp('ca-codex'), qA5 = qDisp('ca-set'), qA6 = qDisp('ca-mute');
 qSync('over', false);
-const qB1 = qDisp('ca-start'), qB2 = qDisp('ca-restart'), qB3 = qDisp('ca-title');
+const qB1 = qDisp('ca-start'), qB2 = qDisp('ca-restart'), qB3 = qDisp('ca-title'),
+      qB4 = qDisp('ca-coop'), qB5 = qDisp('ca-codex');
+qSync('clear', false);
+const qE1 = qDisp('ca-next'), qE2 = qDisp('ca-title'), qE3 = qDisp('ca-start');
 qSync('playing', true);
-const qC1 = qDisp('ca-resume'), qC2 = qDisp('ca-restart');
+const qC1 = qDisp('ca-resume'), qC2 = qDisp('ca-restart'), qC3 = qDisp('ca-start');
 qSync('playing', false);
 const qD1 = qDisp('ca-start'), qD2 = qDisp('ca-resume');
-assert('Q4 画面内按钮按状态切换（标题/结束/暂停/游玩各自只显示该显示的）',
-       qA1 === '' && qA2 === 'none' &&
-       qB1 === 'none' && qB2 === '' && qB3 === '' &&
-       qC1 === '' && qC2 === 'none' &&
+assert('Q4 画面内菜单按状态切换（标题菜单 / 结束 / 过关 / 暂停 / 游玩 各自只显示该显示的）',
+       qA1 === '' && qA2 === 'none' && qA3 === '' && qA4 === '' && qA5 === '' && qA6 === '' &&
+       qB1 === 'none' && qB2 === '' && qB3 === '' && qB4 === 'none' && qB5 === '' &&
+       qE1 === '' && qE2 === '' && qE3 === 'none' &&
+       qC1 === '' && qC2 === '' && qC3 === 'none' &&
        qD1 === 'none' && qD2 === 'none',
-       'title[' + qA1 + '|' + qA2 + '] over[' + qB1 + '|' + qB2 + '|' + qB3 +
-       '] pause[' + qC1 + '|' + qC2 + '] play[' + qD1 + '|' + qD2 + ']');
+       'title[' + [qA1, qA2, qA3, qA4, qA5, qA6].join('|') + '] over[' + [qB1, qB2, qB3, qB4, qB5].join('|') +
+       '] clear[' + [qE1, qE2, qE3].join('|') + '] pause[' + [qC1, qC2, qC3].join('|') +
+       '] play[' + [qD1, qD2].join('|') + ']');
 
 /* Q5 覆盖层文字做成精灵后按内容缓存：静态界面每帧零 fillText */
 overlayCache = null;
@@ -709,6 +717,74 @@ assert('R6 双人 UI：DOM HUD 存在玩家2 武器槽，且面板武器行走�
        !!rHudEl && rHudEl.id === 'hud-weapon2' && typeof drawWeaponLine === 'function',
        'hud-weapon2=' + (rHudEl ? 'ok' : 'missing'));
 netMode = rSavedNet; player2 = rSavedP2;
+
+/* ---------- S. 界面重构：顶部工具栏搬进画面 + 手机横屏 ----------
+ * 背景：原先「开始/双人/全图/全屏/音效/闪烁/设置/图鉴/暂停」是一排画布上方的
+ * 按钮，手机上离拇指很远、还白白吃掉竖向空间；页脚那一长串操作说明同理。
+ * 现在全部收进画面内的菜单与弹窗，并补上手机端真正缺的东西（横屏、血量档位）。 */
+
+/* S1 血量档位可程序化切换（此前只有键盘 H，手机用户根本没有入口） */
+const sSavedHp = hpMode;
+setHpMode(PLAYER_HP_MODES.length);          // 正好越界 → 应回绕到 0
+const sHpWrap = hpMode === 0;
+setHpMode(2);
+const sHp2 = hpMode === 2;
+setHpMode(-1);                              // 负数也要安全回绕
+const sHpNeg = hpMode === PLAYER_HP_MODES.length - 1;
+hpMode = sSavedHp;
+assert('S1 血量档位可程序化切换（越界/负数安全回绕）', sHpWrap && sHp2 && sHpNeg,
+       'wrap=' + sHpWrap + ' ->2=' + sHp2 + ' neg=' + sHpNeg);
+
+/* S2 设置 / 图鉴弹窗可开关且互斥（避免两层叠在一起） */
+const sSetOv = document.getElementById('set-overlay');
+const sCxOv  = document.getElementById('codex-overlay');
+const sLog = [];
+sSetOv.classList = { toggle:(c,on)=>{ sLog.push('set:' + c + '=' + !!on); }, add:NO, remove:NO, contains:()=>false };
+sCxOv.classList  = { toggle:(c,on)=>{ sLog.push('cx:' + c + '=' + !!on); },  add:NO, remove:NO, contains:()=>false };
+showSet(true);
+const sSetOpen = sLog.indexOf('set:show=true') >= 0, sCxClosed = sLog.indexOf('cx:show=false') >= 0;
+sLog.length = 0;
+showCodex(true);
+const sSetClosed2 = sLog.indexOf('set:show=false') >= 0, sCxOpen2 = sLog.indexOf('cx:show=true') >= 0;
+assert('S2 设置弹窗可开关，且与图鉴互斥（打开一个自动关掉另一个）',
+       sSetOpen && sCxClosed && sSetClosed2 && sCxOpen2, sLog.join(' '));
+
+/* S3 只有手机（pointer:coarse）进对局时才请求全屏 —— 桌面完全不打扰 */
+const sSavedCoarse = coarsePointer;
+let sFsCalled = 0;
+document.documentElement.requestFullscreen = () => { sFsCalled++; return Promise.resolve(); };
+coarsePointer = false; enterMobileFullscreen();
+const sDeskNoop = sFsCalled === 0;
+coarsePointer = true;  enterMobileFullscreen();
+const sTouchFs = sFsCalled === 1;
+coarsePointer = sSavedCoarse;
+assert('S3 手机进对局才请求全屏（后续用于锁横屏），桌面不打扰', sDeskNoop && sTouchFs,
+       'desktop=' + sDeskNoop + ' touch=' + sTouchFs);
+
+/* S4 锁横屏必须安全退化：桌面不锁；无 orientation API（iOS/测试沙箱）不抛错 */
+coarsePointer = false;
+const sLockDesk = lockLandscape() === null;
+coarsePointer = true;
+const sLockNoApi = lockLandscape() === null;
+coarsePointer = sSavedCoarse;
+assert('S4 lockLandscape：桌面无操作、无 API 环境返回 null 且不抛错',
+       sLockDesk && sLockNoApi, 'desktop=' + sLockDesk + ' noApi=' + sLockNoApi);
+
+/* S5 body.idle 驱动「摇杆让位给按钮」：只有真正在游玩（未暂停）才不 idle */
+const sCls = [];
+document.body.classList = { toggle:(c,on)=>{ sCls.push(c + '=' + !!on); }, add:NO, remove:NO, contains:()=>false };
+state = 'title';   paused = false; caStateKey = ''; syncCenterActions();
+const sTitleIdle = sCls.lastIndexOf('idle=true') >= 0;
+sCls.length = 0;
+state = 'playing'; paused = false; caStateKey = ''; syncCenterActions();
+const sPlayIdle = sCls.lastIndexOf('idle=false') >= 0;
+sCls.length = 0;
+state = 'playing'; paused = true;  caStateKey = ''; syncCenterActions();
+const sPauseIdle = sCls.lastIndexOf('idle=true') >= 0;
+state = 'playing'; paused = false; caStateKey = ''; syncCenterActions();
+assert('S5 body.idle：标题/暂停时隐藏摇杆开火键（并显示暂停键），只有真在游玩才相反',
+       sTitleIdle && sPlayIdle && sPauseIdle,
+       'title=' + sTitleIdle + ' play=' + sPlayIdle + ' pause=' + sPauseIdle);
 `;
 
 let err = null;

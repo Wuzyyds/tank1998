@@ -17,29 +17,10 @@
 <script src="net.js" defer></script>
 <script src="game.js" defer></script>
 </head>
-<body data-page-node-id="9788yFON9sf9Sj9v65yzMs">
+<body class="idle" data-page-node-id="9788yFON9sf9Sj9v65yzMs">
 <h1 data-page-node-id="QCyVPedsXkQYzCfZp5Dc1L">坦克大战</h1>
 <div class="sub" data-page-node-id="g0fdJnETS5qrHl1hMnG1TW">TANK 1998 · 增强版 · 3 级火力 · 7 种武器 · 随机地形 · 智能敌军</div>
-<div id="rotate-hint">建议横屏游玩：画面更大、摇杆更好按</div>
-<div class="toolbar" data-page-node-id="l7BE12SVpwE9CzoX5Aj8vK">
-  <button id="btn-start">▶ 开始游戏</button>
-  <button id="btn-coop">👥 双人游戏</button>
-  <button id="btn-fit" data-page-node-id="aMC4shADBC33GTMfUAXZn6">⛶ 全图</button>
-  <button id="btn-fs" data-page-node-id="AmEndVbNzWxRjVARJ950Wl">🔲 全屏</button>
-  <button id="btn-mute" data-page-node-id="gjqCYcV84yLEbnSYasK9qT">🔊 音效</button>
-  <button id="btn-flash" title="减少画面闪烁（无障碍，遵循 WCAG 2.3.1）">⚡ 闪烁：正常</button>
-  <button id="btn-set" title="主音量 / 音效 / 背景音乐">⚙ 设置</button>
-  <button id="btn-codex" title="武器 / 道具 / 敌人 / 机制图鉴">📖 图鉴</button>
-  <button id="btn-pause" data-page-node-id="Wrt68IkW9tNx6zLWDzbmQB">⏸ 暂停</button>
-</div>
-<!-- 设置面板：分项音量（主/音效/音乐）+ 背景音乐开关，选择会持久化 -->
-<div id="set-panel">
-  <label class="set-row"><span>主音量</span><input type="range" id="vol-master" min="0" max="100" step="5" value="90"></label>
-  <label class="set-row"><span>音效</span><input type="range" id="vol-sfx" min="0" max="100" step="5" value="95"></label>
-  <label class="set-row"><span>音乐</span><input type="range" id="vol-music" min="0" max="100" step="5" value="65"></label>
-  <label class="set-row chk"><input type="checkbox" id="chk-bgm" checked><span>播放背景音乐</span></label>
-  <div class="set-tip">背景音乐为程序实时生成，不额外下载素材；以上设置会自动记住。</div>
-</div>
+<div id="rotate-hint">点「开始游戏」会自动全屏并转为横屏，操作更顺手</div>
 <div id="wrap" data-page-node-id="3u7joqQMIewsonERqcJzxo">
 <canvas id="game" width="680" height="520" data-page-node-id="ikkSJFuA69Y8OMU0x7AWrN"></canvas>
 <!-- 手机端 DOM HUD：canvas 右侧面板在小屏被等比缩到不可读，触屏设备改由此处呈现 -->
@@ -57,6 +38,12 @@
      而弹窗开局后就被关闭，手机端于是完全看不到提示。客方画面靠房主快照驱动，
      房主一掉线画面立刻冻住 —— 没有横幅时表现就像「游戏卡死、摇杆也没反应」。 -->
 <div id="net-banner" role="status" aria-live="polite"></div>
+<!-- 对局中常驻的操作键：暂停 / 音效。手机端固定在屏幕右上角，
+     桌面端叠在游戏区右上角；只在真正游玩中显示。 -->
+<div id="play-ctl">
+  <button id="ctl-pause" class="ctl-btn" title="暂停 (P)">⏸</button>
+  <button id="ctl-mute"  class="ctl-btn" title="音效开关 (M)">🔊</button>
+</div>
 <div id="touchpad" data-page-node-id="FA3nSc6AfkJk2CqukGGs68">
   <div id="joystick" data-page-node-id="joyBase">
     <span class="arrow a-up">▲</span>
@@ -67,14 +54,19 @@
   </div>
   <div class="tbtn" id="pad-fire" data-k="Space" data-page-node-id="weQraFg2caTjD1kHe3pyBF">开火</div>
 </div>
-<!-- 画面内操作按钮：标题 / 结束 / 过关 / 暂停 的主入口。
-     手机端没有键盘，这里让「开始 / 重新开始 / 继续 / 下一关 / 返回标题」都有实体按钮可点。 -->
+<!-- 画面内菜单：标题 / 结束 / 过关 / 暂停 的主入口。
+     原先这些按钮在画布上方的工具栏里，手机上离拇指很远；现在整套搬进画面，
+     由 syncCenterActions() 按「当前状态」显示其中一组（见 game.js 的 CA_BTNS）。 -->
 <div id="center-actions">
-  <button id="ca-start" class="ca-btn primary">▶ 开始游戏</button>
-  <button id="ca-restart" class="ca-btn primary">↻ 重新开始</button>
-  <button id="ca-resume" class="ca-btn primary">▶ 继续</button>
-  <button id="ca-next" class="ca-btn primary">⏭ 下一关</button>
-  <button id="ca-title" class="ca-btn">🏠 返回标题</button>
+  <button id="ca-start"   class="ca-btn primary wide">▶ 开始游戏</button>
+  <button id="ca-next"    class="ca-btn primary wide">⏭ 下一关</button>
+  <button id="ca-resume"  class="ca-btn primary wide">▶ 继续</button>
+  <button id="ca-restart" class="ca-btn primary wide">↻ 重新开始</button>
+  <button id="ca-coop"    class="ca-btn">👥 双人游戏</button>
+  <button id="ca-codex"   class="ca-btn">📖 图鉴</button>
+  <button id="ca-title"   class="ca-btn">🏠 返回标题</button>
+  <button id="ca-set"     class="ca-btn">⚙ 设置</button>
+  <button id="ca-mute"    class="ca-btn">🔊 音效</button>
 </div>
 </div>
 <!-- 图鉴：武器 / 道具 / 敌人 / 机制 -->
@@ -261,7 +253,32 @@
     <div id="coop-status" class="coop-status"></div>
   </div>
 </div>
-<footer>点按屏幕开始 · 摇杆移动 · 开火键射击 · 方向键/WASD移动 · 空格射击 · H 血量档位 · P 暂停 · M 静音 · 敌人也会抢道具 · 子弹相撞：等级高者吞掉低者并降级</footer>
+<!-- 设置：分项音量 + 背景音乐 + 血量档位 + 画面（全图 / 全屏 / 闪烁）
+     原先这些散落在页面顶部工具栏与键盘快捷键里，手机上够不到；
+     统一收进这个弹窗，并保留键盘快捷键（P/M/F/G/H）不变。 -->
+<div id="set-overlay" class="overlay">
+  <div class="modal-box">
+    <div class="codex-head">
+      <h2>设置 · SETTINGS</h2>
+      <button id="btn-set-close" class="codex-close">✕</button>
+    </div>
+    <label class="set-row"><span>主音量</span><input type="range" id="vol-master" min="0" max="100" step="5" value="90"></label>
+    <label class="set-row"><span>音效</span><input type="range" id="vol-sfx" min="0" max="100" step="5" value="95"></label>
+    <label class="set-row"><span>音乐</span><input type="range" id="vol-music" min="0" max="100" step="5" value="65"></label>
+    <label class="set-row chk"><input type="checkbox" id="chk-bgm" checked><span>播放背景音乐</span></label>
+    <div class="set-sec">血量档位<span class="set-sec-note">（桌面端也可按 H 键循环切换）</span></div>
+    <div class="set-row seg" id="seg-hp"></div>
+    <div class="set-sec">画面</div>
+    <div class="set-row btnrow">
+      <button id="set-fit"   class="set-btn">⛶ 全图模式</button>
+      <button id="set-fs"    class="set-btn">🔲 全屏</button>
+      <button id="set-flash" class="set-btn">⚡ 闪烁：正常</button>
+    </div>
+    <div class="set-tip">背景音乐为程序实时生成，不额外下载素材；以上设置会自动记住。</div>
+    <div class="set-sec">键盘快捷键<span class="set-sec-note">（桌面端）</span></div>
+    <div class="set-keys">方向键 / WASD 移动 · 空格 射击 · Enter 开始 · P 暂停 · M 静音 · F 全屏 · G 全图 · H 血量档位</div>
+  </div>
+</div>
 <script>
 /* 注册 Service Worker（仅在 http/https 下；离线可玩、可安装到主屏） */
 if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {

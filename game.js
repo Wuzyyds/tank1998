@@ -2821,37 +2821,29 @@ function overlayText(lines, topY){
     paintOverlayText(lines, topY);      // 回退：无 2D 上下文的环境（测试沙箱）
   }
 }
-/* 标题 / 结束 / 过关三块界面：底部改为实体按钮（见 syncCenterActions），
- * 所以文字整体上移，给按钮腾出位置；文案也改成「点击下方按钮」。 */
+/* 标题 / 结束 / 过关三块界面：底部改为画面内菜单（见 syncCenterActions / CA_BTNS）。
+ * 详细的玩法说明已全部搬进「图鉴」按钮，标题只留最必要的几行 ——
+ * 否则手机上文字会和按钮抢位置（屏幕本来就不高）。 */
 function drawTitle(){
   overlayText([
     { text:'坦 克 大 战', size:'bold 54px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:62 },
-    { text:'TANK 1998 · 增强版', size:'18px sans-serif', color:'#A9B4C0', gap:26 },
-    { text:'保卫基地，消灭所有敌军', size:'16px sans-serif', color:'#C9D1D9', gap:34 },
-    { text:'红色闪烁敌人击杀必掉道具', size:'15px sans-serif', color:'#FF6B6B', gap:24 },
-    { text:'武器字母：F火焰 C冷冻 L激光 S散弹 H追踪 T电磁 D穿甲钻', size:'13px sans-serif', color:'#A9B4C0', gap:32 },
-    { text:'初始 2 条命 · 每 2000 分奖一命 · Lv2/Lv3 火力可挡一次子弹', size:'13px sans-serif', color:'#98A2AD', gap:26 },
-    { text:'方向键/摇杆移动 · 空格/开火键射击', size:'13px sans-serif', color:'#98A2AD', gap:24 },
-    { text:'H 键切换血量档位：' + PLAYER_HP_MODES.map((m, i) =>
-        (i === hpMode ? '【' + m.label + ' ' + m.hp + '血】' : m.label + ' ' + m.hp + '血')).join('  '),
-      size:'13px sans-serif', color:'#46B455', gap:22 },
-    { text:'点击下方按钮 或 按 Enter 开始游戏', size:'15px sans-serif', color:'#7FD0FF', gap:30 },
-  ], 150);
+    { text:'TANK 1998 · 增强版', size:'18px sans-serif', color:'#A9B4C0', gap:30 },
+    { text:'保卫基地，消灭所有敌军', size:'16px sans-serif', color:'#C9D1D9', gap:26 },
+    { text:'红色闪烁敌人击杀必掉道具', size:'15px sans-serif', color:'#FF6B6B', gap:0 },
+  ], 92);
 }
 function drawOver(){
   overlayText([
     { text:'GAME OVER', size:'bold 52px sans-serif', color:'#FF5B5B', gap:76 },
     { text: overReason, size:'22px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:46 },
-    { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:40 },
-    { text:'点击下方按钮 或 按 Enter 重新开始', size:'15px sans-serif', color:'#7FD0FF', gap:30 },
-  ], 175);
+    { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:0 },
+  ], 185);
 }
 function drawClear(){
   overlayText([
     { text:'关卡 ' + level + ' 完成!', size:'bold 44px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:70 },
-    { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:50 },
-    { text:'点击下方按钮 或 按 Enter 进入下一关', size:'15px sans-serif', color:'#7FD0FF', gap:30 },
-  ], 190);
+    { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:0 },
+  ], 200);
 }
 /* 事件提示：敌军增援 / 手雷警示 / 获得武器 */
 function drawHint(){
@@ -3147,6 +3139,16 @@ function coopReset(){
   if (typeof Net !== 'undefined') Net.disconnect();
 }
 
+/* 打开联机弹窗。入口已从页面顶部的「👥 双人游戏」按钮搬到标题菜单里，
+ * 这里做成具名函数供菜单按钮调用（原先是在 coopInit 里直接绑 btn-coop）。 */
+function coopOpen(){
+  const overlay = coopEl('coop-overlay');
+  if (!overlay) return;
+  overlay.classList.add('show');
+  coopRefreshLan();
+  coopRefreshRelay();
+}
+
 function coopInit(){
   if (typeof Net === 'undefined'){ console.warn('[coop] Net 模块未加载'); return; }
   Net.onOpen(() => {
@@ -3155,11 +3157,7 @@ function coopInit(){
   });
   Net.onMessage(coopHandleMsg);
 
-  const btnCoop = coopEl('btn-coop');
   const overlay = coopEl('coop-overlay');
-  if (btnCoop && overlay){
-    btnCoop.addEventListener('click', () => { initAudio(); overlay.classList.add('show'); coopRefreshLan(); coopRefreshRelay(); });
-  }
   const btnClose = coopEl('btn-coop-close');
   if (btnClose) btnClose.addEventListener('click', () => {
     overlay.classList.remove('show'); coopReset(); coopSetStatus(''); coopShowCode('');
@@ -3260,9 +3258,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyG') toggleFit();
   if (e.code === 'KeyE') debugDropEagle();
   if (e.code === 'KeyH' && state === 'title'){
-    hpMode = (hpMode + 1) % PLAYER_HP_MODES.length;
-    if (player){ player.maxHp = playerMaxHp(); player.hp = player.maxHp; }
-    sfx.item();
+    setHpMode(hpMode + 1);
   }
 });
 window.addEventListener('keyup', e => setKey(e.code, false));
@@ -3352,52 +3348,100 @@ if (joy && joyKnob){
   joy.addEventListener('pointercancel', joyEnd);
 }
 
-/* ================= 工具栏：全图 / 全屏 / 音效 / 暂停 ================= */
+/* ================= 工具按钮（已全部搬进画面内）=================
+ * 原先是一排画布上方的工具栏按钮（#btn-start / #btn-fit / #btn-mute …）；
+ * 手机端离拇指太远，还要额外占掉宝贵的竖向空间。
+ * 现在：标题页给一屏画面内菜单（#center-actions），
+ *       对局中只留右上角的「暂停 / 音效」（#play-ctl）。
+ * 键盘快捷键一律保留：P 暂停 / M 静音 / F 全屏 / G 全图 / H 血量档位。 */
+const ctlPause   = document.getElementById('ctl-pause');
+const ctlMute    = document.getElementById('ctl-mute');
+const caStart    = document.getElementById('ca-start');
+const caNext     = document.getElementById('ca-next');
+const caResume   = document.getElementById('ca-resume');
+const caRestart  = document.getElementById('ca-restart');
+const caCoop     = document.getElementById('ca-coop');
+const caCodex    = document.getElementById('ca-codex');
+const caTitle    = document.getElementById('ca-title');
+const caSet      = document.getElementById('ca-set');
+const caMute     = document.getElementById('ca-mute');
+const setOverlay = document.getElementById('set-overlay');
+const setFit     = document.getElementById('set-fit');
+const setFs      = document.getElementById('set-fs');
+const setFlash   = document.getElementById('set-flash');
+const segHp      = document.getElementById('seg-hp');
+
 function toggleFit(){
   document.body.classList.toggle('fit');
-  btnFit.classList.toggle('on', document.body.classList.contains('fit'));
+  if (setFit) setFit.classList.toggle('on', document.body.classList.contains('fit'));
 }
+/* 全屏整页（documentElement）而不是 #wrap：图鉴 / 设置 / 联机弹窗都是 #wrap 的
+ * 兄弟节点，若全屏 #wrap，它们在 fullscreen 的 top layer 下会被一起藏掉 ——
+ * 表现为「手机全屏后点设置是一片黑」。 */
 function toggleFullscreen(){
+  const el = document.documentElement;
   if (!document.fullscreenElement){
-    const el = document.getElementById('wrap');
-    if (el.requestFullscreen) el.requestFullscreen();
-    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    let r = null;
+    try {
+      if (el.requestFullscreen) r = el.requestFullscreen({ navigationUI:'hide' });
+      else if (el.webkitRequestFullscreen) r = el.webkitRequestFullscreen();
+    } catch (e) { r = null; }
+    if (r && typeof r.then === 'function') r.then(lockLandscape).catch(lockLandscape);
+    else lockLandscape();
   } else if (document.exitFullscreen) document.exitFullscreen();
+}
+/* 锁定横屏。浏览器只在「全屏 + 用户手势」中才允许锁定方向，这里只做尽力而为：
+ * 失败（iOS Safari 不支持 / 尚未全屏）静默放弃，页面顶部的 #rotate-hint 仍会提示手动转屏。 */
+function lockLandscape(){
+  if (!coarsePointer) return null;          // 桌面无需锁定，也避免误锁
+  try {
+    if (typeof screen !== 'undefined' && screen.orientation &&
+        typeof screen.orientation.lock === 'function'){
+      const r = screen.orientation.lock('landscape');
+      if (r && typeof r.catch === 'function') r.catch(() => {});
+    }
+  } catch (e) { /* 不支持则忽略 */ }
+  return null;
+}
+/* 手机点「开始游戏」时顺手全屏 + 转横屏 —— 这是「进来就横屏」的唯一可行途径。 */
+function enterMobileFullscreen(){
+  if (!coarsePointer) return;
+  if (document.fullscreenElement){ lockLandscape(); return; }
+  toggleFullscreen();
 }
 function toggleMute(){
   muted = !muted;
-  btnMute.textContent = muted ? '🔇 静音' : '🔊 音效';
-  btnMute.classList.toggle('on', muted);
   try { localStorage.setItem('tank1998_muted', muted ? '1' : '0'); } catch(e) {}   // 静音设置持久化
   applyVolumes();
+  syncMuteBtn();
 }
+/* 音效开关出现在两处：对局中的圆形图标键、标题菜单里的文字按钮 —— 文案要同步 */
 function syncMuteBtn(){
-  if (!btnMute) return;
-  btnMute.textContent = muted ? '🔇 静音' : '🔊 音效';
-  btnMute.classList.toggle('on', muted);
+  if (ctlMute){ ctlMute.textContent = muted ? '🔇' : '🔊'; ctlMute.classList.toggle('on', muted); }
+  if (caMute){ caMute.textContent = muted ? '🔇 静音' : '🔊 音效'; caMute.classList.toggle('on', muted); }
 }
 
-/* ---- 设置面板：主音量 / 音效 / 音乐（分项 + 持久化） ---- */
-const setPanel   = document.getElementById('set-panel');
+/* ---- 设置弹窗：主音量 / 音效 / 音乐 / 背景音乐 / 血量档位 / 画面 ---- */
 const volMaster  = document.getElementById('vol-master');
 const volSfx     = document.getElementById('vol-sfx');
 const volMusic   = document.getElementById('vol-music');
 const chkBgm     = document.getElementById('chk-bgm');
-const btnSet     = document.getElementById('btn-set');
 function syncSetPanel(){
   if (volMaster) volMaster.value = String(Math.round(VOL.master * 100));
   if (volSfx)    volSfx.value    = String(Math.round(VOL.sfx * 100));
   if (volMusic)  volMusic.value  = String(Math.round(VOL.music * 100));
   if (chkBgm)    chkBgm.checked  = bgmOn;
+  syncHpSeg();
+  syncReduceMotionBtn();
+  if (setFit && document.body && document.body.classList){
+    setFit.classList.toggle('on', document.body.classList.contains('fit'));
+  }
 }
-function toggleSetPanel(){
-  if (!setPanel) return;
-  const show = !(setPanel.classList.contains('show'));
-  setPanel.classList.toggle('show', show);
-  if (btnSet) btnSet.classList.toggle('on', show);
-  if (show) syncSetPanel();
+function showSet(show){
+  if (!setOverlay) return;
+  setOverlay.classList.toggle('show', show);
+  if (show){ showCodex(false); syncSetPanel(); }
 }
-if (btnSet) btnSet.addEventListener('click', toggleSetPanel);
 if (volMaster) volMaster.addEventListener('input', e => { initAudio(); setVolume('master', e.target.value / 100); });
 if (volSfx)    volSfx.addEventListener('input',    e => setVolume('sfx',    e.target.value / 100));
 if (volMusic)  volMusic.addEventListener('input',  e => setVolume('music',  e.target.value / 100));
@@ -3405,14 +3449,16 @@ if (chkBgm)    chkBgm.addEventListener('change',   e => { initAudio(); setBgmOn(
 
 /* ---- 图鉴：武器 / 道具 / 敌人 / 机制（覆盖层 + 分页切换） ---- */
 const codexOverlay = document.getElementById('codex-overlay');
-const btnCodex     = document.getElementById('btn-codex');
-function showCodex(show){ if (!codexOverlay) return; codexOverlay.classList.toggle('show', show); if (btnCodex) btnCodex.classList.toggle('on', show); }
+function showCodex(show){
+  if (!codexOverlay) return;
+  codexOverlay.classList.toggle('show', show);
+  if (show) showSet(false);
+}
 function codexSwitchTab(name){
   if (!codexOverlay || typeof codexOverlay.querySelectorAll !== 'function') return;
   codexOverlay.querySelectorAll('.codex-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === name));
   codexOverlay.querySelectorAll('.codex-pane').forEach(p => p.classList.toggle('active', p.getAttribute('data-pane') === name));
 }
-if (btnCodex) btnCodex.addEventListener('click', () => { initAudio(); showCodex(true); });
 if (codexOverlay){
   const closeBtn = document.getElementById('btn-codex-close');
   if (closeBtn) closeBtn.addEventListener('click', () => showCodex(false));
@@ -3423,7 +3469,39 @@ if (codexOverlay){
     });
   }
 }
-window.addEventListener('keydown', e => { if (e.key === 'Escape'){ showCodex(false); } });
+if (setOverlay){
+  const setClose = document.getElementById('btn-set-close');
+  if (setClose) setClose.addEventListener('click', () => showSet(false));
+  setOverlay.addEventListener('click', e => { if (e.target === setOverlay) showSet(false); });
+}
+window.addEventListener('keydown', e => { if (e.key === 'Escape'){ showCodex(false); showSet(false); } });
+
+/* ---- 血量档位（原先只有键盘 H 能切，手机用户压根没有入口） ---- */
+function buildHpSeg(){
+  if (!segHp || typeof segHp.appendChild !== 'function') return;   // 无 DOM 的环境（测试桩）直接跳过
+  segHp.textContent = '';
+  PLAYER_HP_MODES.forEach((m, i) => {
+    const b = document.createElement('button');
+    b.className = 'seg-btn' + (i === hpMode ? ' on' : '');
+    b.textContent = m.label + ' ' + m.hp + ' 血';
+    b.setAttribute('data-hp', String(i));
+    b.addEventListener('click', () => setHpMode(i));
+    segHp.appendChild(b);
+  });
+}
+function setHpMode(i){
+  const n = PLAYER_HP_MODES.length;
+  hpMode = ((i % n) + n) % n;
+  if (player){ player.maxHp = playerMaxHp(); player.hp = player.maxHp; }
+  sfx.item();
+  syncHpSeg();
+}
+function syncHpSeg(){
+  if (!segHp || typeof segHp.querySelectorAll !== 'function') return;
+  segHp.querySelectorAll('.seg-btn').forEach(b => {
+    b.classList.toggle('on', Number(b.getAttribute('data-hp')) === hpMode);
+  });
+}
 /* 暂停状态的唯一入口。双人下暂停是「全局」的：任一方按暂停，另一方也停。
  * sync=true 表示本次由本机用户发起，需要把状态广播给对端（房主=权威广播，
  * 客方=请求广播）；sync=false 用于跟随对端下发的状态，避免双方互相回广播形成回声。 */
@@ -3431,9 +3509,9 @@ function setPaused(v, sync){
   v = !!v;
   const changed = (paused !== v);
   paused = v;
-  if (typeof btnPause !== 'undefined' && btnPause){
-    btnPause.textContent = paused ? '▶ 继续' : '⏸ 暂停';
-    btnPause.classList.toggle('on', paused);
+  if (ctlPause){
+    ctlPause.textContent = paused ? '▶' : '⏸';
+    ctlPause.classList.toggle('on', paused);
   }
   if (sync && netMode !== 'off' && typeof Net !== 'undefined' && Net.isOpen()){
     Net.send({ type:'pause', v: paused ? 1 : 0 });
@@ -3445,49 +3523,33 @@ function setPaused(v, sync){
 function togglePause(){ return setPaused(!paused, true); }
 function toggleReduceMotion(){ setReduceMotion(!reduceMotion); }
 function syncReduceMotionBtn(){
-  if (!btnFlash) return;
-  btnFlash.textContent = reduceMotion ? '⚡ 闪烁：减弱' : '⚡ 闪烁：正常';
-  btnFlash.classList.toggle('on', reduceMotion);
+  if (!setFlash) return;
+  setFlash.textContent = reduceMotion ? '⚡ 闪烁：减弱' : '⚡ 闪烁：正常';
+  setFlash.classList.toggle('on', reduceMotion);
 }
-const btnFit   = document.getElementById('btn-fit');
-const btnFs    = document.getElementById('btn-fs');
-const btnMute  = document.getElementById('btn-mute');
-const btnPause = document.getElementById('btn-pause');
-const btnFlash = document.getElementById('btn-flash');
-const btnStart = document.getElementById('btn-start');
-btnFit.addEventListener('click', toggleFit);
-btnFs.addEventListener('click', toggleFullscreen);
-btnMute.addEventListener('click', toggleMute);
-btnPause.addEventListener('click', togglePause);
-if (btnFlash) btnFlash.addEventListener('click', toggleReduceMotion);
-if (btnStart) btnStart.addEventListener('click', () => { initAudio(); requestStart(); });
+buildHpSeg();
 syncReduceMotionBtn();
-syncMuteBtn();        // 工具按钮就位后再同步（muted 已从 localStorage 恢复）
+syncMuteBtn();        // 按钮就位后再同步（muted 已从 localStorage 恢复）
 syncSetPanel();
 
-/* 开始按钮文案随状态切换（手机端主要入口） */
-let startBtnLabel = '';
-function syncStartBtn(){
-  if (!btnStart) return;
-  const label = state === 'title' ? '▶ 开始游戏'
-              : state === 'over'  ? '↻ 重新开始'
-              : state === 'clear' ? '⏭ 下一关'
-              : '▶ 游戏进行中';
-  if (label !== startBtnLabel){ startBtnLabel = label; btnStart.textContent = label; }
-  const dis = (state === 'playing');
-  if (btnStart.disabled !== dis) btnStart.disabled = dis;
-}
-
-/* ================= 画面内操作按钮（标题 / 结束 / 过关 / 暂停） =================
- * 手机端没有键盘，也不能指望用户去点画面：这里把「开始 / 重新开始 / 继续 /
- * 下一关 / 返回标题」做成画面上的实体按钮，只在对应状态出现。
- * 用状态串缓存，避免每帧都去写 DOM。 */
+/* ================= 画面内菜单 =================
+ * 手机端没有键盘，也不能指望用户去点画面：这里把「开始 / 双人 / 图鉴 / 设置 /
+ * 音效 / 重新开始 / 下一关 / 继续 / 返回标题」全部做成画面上的实体按钮，
+ * 只在对应状态出现。顺序即排版顺序（flex-wrap：.wide 独占一行，其余每行两个）。
+ * slot 'paused' 专指「对局中但已暂停」这一档。
+ * 用状态串缓存，避免每帧都写 DOM。 */
 const centerActions = document.getElementById('center-actions');
-const caStart   = document.getElementById('ca-start');
-const caRestart = document.getElementById('ca-restart');
-const caResume  = document.getElementById('ca-resume');
-const caNext    = document.getElementById('ca-next');
-const caTitle   = document.getElementById('ca-title');
+const CA_BTNS = [
+  [caStart,   'title'],
+  [caNext,    'clear'],
+  [caResume,  'paused'],
+  [caRestart, 'over paused'],
+  [caCoop,    'title'],
+  [caCodex,   'title over clear'],
+  [caTitle,   'over clear paused'],
+  [caSet,     'title'],
+  [caMute,    'title'],
+];
 let caStateKey = '';
 function caShow(el, on){ if (el && el.style) el.style.display = on ? '' : 'none'; }
 function syncCenterActions(){
@@ -3495,21 +3557,25 @@ function syncCenterActions(){
   const key = state + (paused ? ':p' : '') + (netMode === 'off' ? '' : ':' + netMode);
   if (key === caStateKey) return;
   caStateKey = key;
-  const isTitle = state === 'title', isOver = state === 'over',
-        isClear = state === 'clear', isPause = state === 'playing' && paused;
-  centerActions.classList.toggle('show', isTitle || isOver || isClear || isPause);
-  // 非游玩状态隐藏摇杆 / 开火键（触屏），按钮才有干净的位置
-  if (document.body && document.body.classList) document.body.classList.toggle('idle', state !== 'playing');
-  caShow(caStart,   isTitle);
-  caShow(caRestart, isOver);
-  caShow(caResume,  isPause);
-  caShow(caNext,    isClear);
-  caShow(caTitle,   isOver || isClear);
+  const slot = (state === 'playing' && paused) ? 'paused' : state;
+  centerActions.classList.toggle('show', slot !== 'playing');
+  /* idle = 不在「真正对局中」：摇杆 / 开火键让位给菜单按钮，避免两者抢同一块位置 */
+  if (document.body && document.body.classList) document.body.classList.toggle('idle', slot !== 'playing');
+  for (const it of CA_BTNS) caShow(it[0], it[1].split(' ').indexOf(slot) >= 0);
 }
-if (caStart)   caStart.addEventListener('click',   () => { initAudio(); requestStart(); });
-if (caRestart) caRestart.addEventListener('click', () => { initAudio(); setPaused(false, true); requestStart(); });
-if (caResume)  caResume.addEventListener('click',  () => { initAudio(); setPaused(false, true); });
+if (caStart)   caStart.addEventListener('click',   () => { initAudio(); enterMobileFullscreen(); requestStart(); });
 if (caNext)    caNext.addEventListener('click',    () => { initAudio(); requestStart(); });
+if (caResume)  caResume.addEventListener('click',  () => { initAudio(); setPaused(false, true); });
+if (caRestart) caRestart.addEventListener('click', () => { initAudio(); setPaused(false, true); requestStart(); });
+if (caCoop)    caCoop.addEventListener('click',    () => { initAudio(); enterMobileFullscreen(); coopOpen(); });
+if (caCodex)   caCodex.addEventListener('click',   () => { initAudio(); showCodex(true); });
+if (caSet)     caSet.addEventListener('click',     () => { initAudio(); showSet(true); });
+if (caMute)    caMute.addEventListener('click',    () => { initAudio(); toggleMute(); });
+if (ctlPause)  ctlPause.addEventListener('click',  () => { initAudio(); togglePause(); });
+if (ctlMute)   ctlMute.addEventListener('click',   () => { initAudio(); toggleMute(); });
+if (setFit)    setFit.addEventListener('click',    () => toggleFit());
+if (setFs)     setFs.addEventListener('click',     () => toggleFullscreen());
+if (setFlash)  setFlash.addEventListener('click',  () => toggleReduceMotion());
 if (caTitle)   caTitle.addEventListener('click',   () => {
   initAudio();
   // 客方不能自行切场景：同样把「返回标题」变成一条请求交给房主
@@ -3626,7 +3692,6 @@ function loop(now){
     render();
   }
   syncBgm();          // 按状态切换背景音乐（无 AudioContext / 关掉音乐时为空操作）
-  syncStartBtn();
   syncCenterActions();
   applyBanner();      // 联机横幅按 ttl 自动过期（内容不变时零 DOM 开销）
   requestAnimationFrame(loop);

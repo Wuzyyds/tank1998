@@ -8,43 +8,38 @@ h1 { color:#f0c040; text-shadow:0 3px 0 #7a5200; font-size:30px; letter-spacing:
 #wrap { position:relative; }
 canvas { width:min(680px,96vw); height:auto; aspect-ratio:680/520; image-rendering:auto;
   border:4px solid #30363d; border-radius:10px; background:#000; display:block; touch-action:none; }
-/* 全图模式：画面等比放大填满窗口 */
-body.fit h1, body.fit .sub, body.fit footer, body.fit .toolbar { display:none; }
+/* 全图模式：画面等比放大填满窗口（顶部标题让位） */
+body.fit h1, body.fit .sub { display:none; }
 body.fit { justify-content:flex-start; }
 body.fit #wrap { margin:0; }
 body.fit canvas { width:min(100vw, calc(100vh * 680 / 520)); border-width:0; border-radius:0; }
-/* 页脚是操作说明正文（点按/摇杆/键盘/规则），旧色 #565d66 对 #0d1117 仅 2.84:1
- * （WCAG AA 正文下限 4.5:1），改为 #8b949e → 6.15:1 达标 */
-footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
-.toolbar { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; justify-content:center; }
-.toolbar button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:8px;
-  padding:7px 14px; font-size:13px; cursor:pointer; font-family:inherit; }
-.toolbar button:hover { background:#30363d; }
-.toolbar button.on { background:#1f6feb; border-color:#388bfd; color:#fff; }
-.toolbar button:disabled { opacity:.45; cursor:default; }
-.toolbar #btn-start { background:#1f6feb; border-color:#388bfd; color:#fff; font-weight:600; }
-.toolbar #btn-start:hover { background:#388bfd; }
-/* 设置面板：主音量 / 音效 / 音乐分项调节，选择持久化 */
-#set-panel { display:none; margin:0 12px 10px; padding:12px 14px; border-radius:10px;
-  background:#161b22; border:1px solid #30363d; width:min(420px,92vw); }
-#set-panel.show { display:block; }
-.set-row { display:flex; align-items:center; gap:10px; margin:7px 0; font-size:13px; color:#c9d1d9; cursor:pointer; }
-.set-row > span { width:54px; flex:none; }
+
+/* ================= 设置弹窗 ================= */
+#set-overlay { z-index:55; }
+.modal-box { width:min(420px,94vw); max-height:88vh; overflow-y:auto;
+  background:#161B22; border:1px solid #30363d; border-radius:14px; padding:18px 18px 14px;
+  color:#c9d1d9; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+.set-row { display:flex; align-items:center; gap:10px; margin:9px 0; font-size:13.5px; color:#c9d1d9; cursor:pointer; }
+.set-row > span { width:56px; flex:none; }
 .set-row input[type=range] { flex:1; accent-color:#1f6feb; min-width:0; }
 .set-row.chk { gap:8px; }
 .set-row.chk > span { width:auto; }
-.set-tip { margin-top:8px; font-size:12px; color:#8b949e; line-height:1.5; }
-/* 触屏设备：放大按钮，便于手指点按 */
-@media (pointer:coarse){
-  .toolbar button { padding:11px 18px; font-size:15px; border-radius:10px; }
-  .toolbar #btn-start { padding:11px 26px; font-size:16px; }
-  footer { padding:0 12px; line-height:1.7; }
-}
-#touchpad { position:absolute; inset:0; display:none; pointer-events:none; }
-@media (pointer:coarse){ #touchpad { display:block; } }
-/* 联机状态横幅：压在游戏区顶部，深色底 + 金色高对比文字。
- * 手机端客方在「等待房主 / 房主掉线 / 重连中」时全靠它判断处境，
- * 否则画面静止会被误认为卡死。pointer-events:none 不挡操作。 */
+.set-sec { margin:16px 0 6px; font-size:13px; color:#8b949e; letter-spacing:1px;
+  border-top:1px solid #21262d; padding-top:12px; }
+.set-sec-note { font-size:11.5px; color:#6e7681; letter-spacing:0; }
+.set-row.seg { gap:8px; }
+.set-row.btnrow { gap:8px; flex-wrap:wrap; }
+.set-tip { margin-top:12px; font-size:12px; color:#8b949e; line-height:1.5; }
+.set-keys { font-size:12.5px; color:#8b949e; line-height:1.7; }
+.set-btn, .seg-btn { flex:1; min-width:104px; font-family:inherit; font-size:13.5px; cursor:pointer;
+  background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:9px; padding:10px 12px;
+  white-space:nowrap; }
+.set-btn:hover, .seg-btn:hover { background:#30363d; }
+.set-btn.on, .seg-btn.on { background:#1f6feb; border-color:#388bfd; color:#fff; }
+
+/* ================= 联机状态横幅 ================= */
+/* 压在游戏区顶部，深色底 + 金色高对比文字。手机端客方在「等待房主 / 房主掉线 /
+ * 重连中」时全靠它判断处境，否则画面静止会被误认为卡死。pointer-events:none 不挡操作。 */
 #net-banner { position:absolute; left:50%; top:8px; transform:translateX(-50%);
   max-width:92%; padding:6px 14px; border-radius:999px; display:none;
   background:rgba(13,17,23,.88); border:1px solid rgba(240,192,64,.6);
@@ -55,6 +50,19 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
 @media (pointer:coarse){
   #net-banner { top:6px; font-size:14px; padding:7px 16px; }
 }
+
+/* ================= 对局中常驻操作键（暂停 / 音效） ================= */
+/* 只在真正游玩中出现；body.idle（标题/结束/过关/暂停）时隐藏，把位置让给画面内菜单。 */
+#play-ctl { position:absolute; right:23.53%; top:8px; display:none; gap:8px; z-index:7; }
+body:not(.idle) #play-ctl { display:flex; }
+.ctl-btn { pointer-events:auto; font-family:inherit; font-size:17px; line-height:1;
+  width:40px; height:40px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  background:rgba(13,17,23,.62); color:#c9d1d9; border:1px solid rgba(255,255,255,.28);
+  box-shadow:0 2px 10px rgba(0,0,0,.4); -webkit-tap-highlight-color:transparent; }
+.ctl-btn:hover { background:rgba(48,54,61,.9); }
+.ctl-btn.on { background:#1f6feb; border-color:#388bfd; color:#fff; }
+
+/* ================= 触屏摇杆 / 开火键 ================= */
 .tbtn { position:absolute; pointer-events:auto; user-select:none; touch-action:none;
   display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
 /* 左下角虚拟摇杆：固定底盘 + 可拖动摇杆头，方向落定为 上/下/左/右。
@@ -93,7 +101,8 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
 #pad-fire:active {
   background:radial-gradient(circle at 40% 36%, rgba(255,225,150,.55), rgba(240,192,64,.38)),
              radial-gradient(circle at 50% 50%, rgba(13,17,23,.38), rgba(13,17,23,.55)); }
-/* 双人合作：房间弹窗 */
+
+/* ================= 弹窗（图鉴 / 联机 / 设置） ================= */
 .overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
   background:rgba(0,0,0,.66); z-index:50; padding:16px; }
 .overlay.show { display:flex; }
@@ -112,8 +121,19 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
 .coop-row button:hover { background:#388bfd; }
 #btn-coop-close { background:#21262d; border-color:#30363d; }
 #btn-coop-close:hover { background:#30363d; }
-.coop-code-display { color:#7FD0FF; font-size:bold; font-size:22px; letter-spacing:6px; text-align:center;
+.coop-code-display { color:#7FD0FF; font-size:22px; letter-spacing:6px; text-align:center;
   min-height:26px; margin:4px 0 6px; }
+.coop-status { color:#FFD23F; font-size:13px; text-align:center; min-height:18px; line-height:1.5; }
+/* 中继地址（进阶折叠区）：与房间号输入框区分——不放大写、不加字距 */
+#relay-panel { margin-top:4px; }
+#relay-panel summary { color:#8b949e; font-size:12px; cursor:pointer; list-style:none; padding:4px 0; }
+#relay-panel summary::-webkit-details-marker { display:none; }
+#relay-panel summary::before { content:'▸ '; }
+#relay-panel[open] summary::before { content:'▾ '; }
+#relay-panel .coop-hint { margin:8px 0; }
+.coop-row.relay input { letter-spacing:0; text-transform:none; font-size:12.5px; text-align:left; padding:8px 10px; }
+.coop-row.relay button { font-size:13px; padding:8px 12px; }
+
 /* 图鉴：武器 / 道具 / 敌人 / 机制 */
 #codex-overlay { z-index:60; }
 .codex-box { width:min(560px,94vw); max-height:86vh; display:flex; flex-direction:column;
@@ -142,43 +162,58 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
 .cx-tag { font-size:11px; color:#fff; background:#444; border-radius:4px; padding:1px 6px; margin-left:6px; }
 .cx-meta { font-size:12.5px; color:#7FD0FF; margin:2px 0; }
 .cx-desc { font-size:12.5px; color:#9aa4b0; line-height:1.6; }
-@media (pointer:coarse){ .codex-box { width:96vw; } .codex-tab { padding:10px 16px; font-size:15px; } }
 
-.coop-status { color:#FFD23F; font-size:13px; text-align:center; min-height:18px; line-height:1.5; }
-/* 中继地址（进阶折叠区）：与房间号输入框区分——不放大写、不加字距 */
-#relay-panel { margin-top:4px; }
-#relay-panel summary { color:#8b949e; font-size:12px; cursor:pointer; list-style:none; padding:4px 0; }
-#relay-panel summary::-webkit-details-marker { display:none; }
-#relay-panel summary::before { content:'▸ '; }
-#relay-panel[open] summary::before { content:'▾ '; }
-#relay-panel .coop-hint { margin:8px 0; }
-.coop-row.relay input { letter-spacing:0; text-transform:none; font-size:12.5px; text-align:left; padding:8px 10px; }
-.coop-row.relay button { font-size:13px; padding:8px 12px; }
 /* 无障碍：系统开启「减少动效」时关闭 CSS 过渡动画（配合 game.js 的闪烁降频） */
 @media (prefers-reduced-motion: reduce){
   #joy-knob { transition:none; }
-  .toolbar button { transition:none; }
 }
-/* 手机竖屏提示：横屏后画布按 680px 满幅显示，HUD 更易读 */
+/* 手机竖屏提示：点开始会自动转横屏，锁定失败时（如 iOS）据此手动转屏 */
 #rotate-hint { display:none; }
 @media (pointer:coarse) and (orientation:portrait){
-  #rotate-hint { display:block; margin:0 12px 8px; padding:6px 12px; border-radius:8px;
+  #rotate-hint { display:block; margin:0 12px 10px; padding:6px 12px; border-radius:8px;
     background:rgba(31,111,235,.15); border:1px solid rgba(56,139,253,.45);
     color:#9CC7FF; font-size:13px; text-align:center; }
 }
-/* 手机端画布裁切 + DOM HUD
+
+/* ================= 画面内菜单（标题 / 结束 / 过关 / 暂停） =================
+ * 标题 / 结束 / 过关 / 暂停 的主入口，原先在画布上方工具栏，手机上离拇指太远。
+ * 用 flex-wrap + .wide（flex-basis:100%）自动排成「一行一个主按钮 + 每行两个次按钮」，
+ * 单独一个按钮的那一行会自动居中（grid 做不到）。
+ * 定位对齐「游戏区中心」而不是 #wrap 中心：桌面 canvas 宽 680、游戏区只占 520 →
+ * left:38.24%；触屏裁掉右栏 → 50%。 */
+#center-actions { position:absolute; left:38.24%; bottom:9%; transform:translateX(-50%);
+  display:none; flex-wrap:wrap; justify-content:center; gap:9px;
+  width:min(88%, 330px); z-index:8; pointer-events:none; }
+#center-actions.show { display:flex; }
+.ca-btn { pointer-events:auto; font-family:inherit; font-size:16px; font-weight:600;
+  flex:0 0 auto; padding:12px 20px; border-radius:12px; cursor:pointer; white-space:nowrap;
+  background:rgba(33,38,45,.94); color:#c9d1d9; border:1px solid #30363d;
+  box-shadow:0 3px 14px rgba(0,0,0,.55); -webkit-tap-highlight-color:transparent; }
+.ca-btn.wide { flex-basis:100%; }
+.ca-btn.primary { background:#1f6feb; border-color:#388bfd; color:#fff; }
+.ca-btn.primary:hover { background:#388bfd; }
+.ca-btn:hover { background:#30363d; }
+.ca-btn:active { transform:translateY(1px); }
+
+/* ================= 触屏布局 =================
  * canvas 逻辑宽 680 含右侧 160px 面板，在小屏等比缩小后字号仅约 6px 不可读；
- * 触屏设备保留游戏区、裁掉面板并把游戏区放大到满宽，信息改由 #hud 以正常字号呈现。
- * 桌面端（pointer:fine）不进入此分支，canvas 内面板与字号完全不变。 */
+ * 触屏设备保留游戏区（520×520 正方形）、裁掉面板并把游戏区放大，
+ * 信息改由 #hud 以正常字号呈现。桌面端（pointer:fine）不进入此分支。 */
 #hud { display:none; }
+#touchpad { position:absolute; inset:0; display:none; pointer-events:none; }
 @media (pointer:coarse){
+  h1, .sub { display:none; }                 /* 画面内已有大标题，省下竖向空间给游戏区 */
+  body.fit h1, body.fit .sub { display:none; }
   #wrap { width:min(100vw, 100vh); overflow:hidden; }
   canvas, body.fit canvas {
     width:calc(min(100vw, 100vh) * 680 / 520); max-width:none;
     border-width:0; border-radius:0; }
+  #touchpad { display:block; }
+  /* 顶部信息条：右侧留出 ~100px 给固定在这儿的暂停 / 音效键，
+   * 否则两者会叠在一起（宽度不足时 .hud-i 会自动换行，仍不会被压住）。 */
   #hud { display:flex; position:absolute; left:0; top:0; width:100%; z-index:6;
     flex-wrap:wrap; gap:0 12px; align-items:center; justify-content:center;
-    padding:4px 8px 5px; pointer-events:none;
+    padding:4px 100px 5px 8px; pointer-events:none;
     background:linear-gradient(rgba(13,17,23,.88), rgba(13,17,23,.45));
     font-size:13px; line-height:1.3; }
   #hud .hud-i { color:#A9B4C0; white-space:nowrap; }
@@ -190,28 +225,25 @@ footer { color:#8b949e; font-size:12px; margin:10px 0 6px; text-align:center; }
   #hud.coop .hud-i.p2 { display:inline; color:#7FD0FF; }
   /* 玩家2 的武器数字同样走蓝色语义色（否则被 .wpn b 的黄色覆盖，与 P1 混淆） */
   #hud.coop .hud-i.p2 b { color:#7FD0FF; }
-}
-
-/* 画面内操作按钮：标题 / 结束 / 过关 / 暂停 的主入口。
- * 桌面端 canvas 宽 680 而游戏区只占左侧 520，故按钮要对齐「游戏区中心」
- * （520/2 ÷ 680 = 38.24%），而不是 #wrap 的几何中心；
- * 触屏端右侧面板已被裁掉，游戏区正好铺满 #wrap，直接用 50%。 */
-#center-actions { position:absolute; left:38.24%; bottom:9%; transform:translateX(-50%);
-  display:none; gap:10px; z-index:8; pointer-events:none; }
-#center-actions.show { display:flex; }
-.ca-btn { pointer-events:auto; font-family:inherit; font-size:16px; font-weight:600;
-  padding:12px 22px; border-radius:12px; cursor:pointer; white-space:nowrap;
-  background:#21262d; color:#c9d1d9; border:1px solid #30363d;
-  box-shadow:0 3px 14px rgba(0,0,0,.55); -webkit-tap-highlight-color:transparent; }
-.ca-btn.primary { background:#1f6feb; border-color:#388bfd; color:#fff; }
-.ca-btn.primary:hover { background:#388bfd; }
-.ca-btn:hover { background:#30363d; }
-.ca-btn:active { transform:translateY(1px); }
-@media (pointer:coarse){
-  #center-actions { left:50%; bottom:10%; gap:12px; }
-  .ca-btn { font-size:17px; padding:14px 24px; border-radius:14px; }
-  /* 标题 / 结束 / 过关时隐藏摇杆与开火键：既避免与按钮抢位置，也减少画面噪音。
-   * 暂停时仍属 playing，摇杆保留（但此时只显示单个「继续」按钮，不会重叠）。 */
+  #play-ctl { position:absolute; right:6px; top:6px; }
+  .ctl-btn { width:44px; height:44px; font-size:19px; }
+  #center-actions { left:50%; bottom:7%; gap:9px; width:min(90%, 340px); }
+  /* 标题 / 结束 / 过关 / 暂停时隐藏摇杆与开火键：既避免与按钮抢位置，也减少画面噪音 */
   body.idle #touchpad { display:none; }
 }
-
+/* 横屏：正方形游戏区居中，两侧留白正好放摇杆与开火键 —— 手柄式布局，
+ * 拇指在屏幕外侧、画面中央完全不被遮挡。 */
+@media (pointer:coarse) and (min-aspect-ratio:1/1){
+  #hud { padding-right:8px; }                        /* 操作键已在两侧留白里，无需让位 */
+  #play-ctl  { position:fixed; right:14px; top:12px; }
+  #touchpad  { position:fixed; inset:0; }
+  #joystick  { position:fixed; left:14px; bottom:14px; }
+  #pad-fire  { position:fixed; right:16px; bottom:18px; }
+}
+@media (pointer:coarse){
+  /* 触屏按钮比桌面略小一号：画面在手机上被缩到 0.7 倍左右，
+   * 沿用桌面的 16px 会让按钮相对画面显得过重、也更容易顶到标题文字。 */
+  .ca-btn { font-size:15px; padding:11px 16px; border-radius:13px; }
+  .codex-tab { padding:10px 16px; font-size:15px; }
+  .codex-box { width:96vw; }
+}

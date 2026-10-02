@@ -203,13 +203,25 @@ async function integration() {
       if (noOrigin.socket) { try { noOrigin.socket.destroy(); } catch (e) {} }
     } finally { srv2.kill(); }
 
-    // 页面结构：设置面板（分项音量）与手机端 HUD 的武器栏必须存在，否则静默失效
+    // 页面结构：设置弹窗（音量/血量档位/画面）、手机端 HUD、中继面板、画面内菜单必须存在，
+    // 否则按钮静默失效（点了没反应，且不会有任何报错）
     const html = await (await fetch('http://127.0.0.1:' + PORT + '/')).text();
-    const need = ['id="set-panel"', 'id="btn-set"', 'id="vol-master"', 'id="vol-sfx"', 'id="vol-music"', 'id="chk-bgm"', 'id="hud-weapon"',
+    const need = ['id="set-overlay"', 'id="vol-master"', 'id="vol-sfx"', 'id="vol-music"', 'id="chk-bgm"',
+                  'id="seg-hp"', 'id="set-fit"', 'id="set-fs"', 'id="set-flash"',
+                  'id="hud-weapon"', 'id="hud-weapon2"',
                   'id="relay-url"', 'id="btn-relay"', 'id="relay-now"', 'id="coop-lan"',
-                  'id="center-actions"', 'id="ca-start"', 'id="ca-restart"', 'id="ca-resume"', 'id="ca-next"', 'id="ca-title"'];
+                  'id="center-actions"', 'id="ca-start"', 'id="ca-restart"', 'id="ca-resume"', 'id="ca-next"',
+                  'id="ca-title"', 'id="ca-coop"', 'id="ca-codex"', 'id="ca-set"', 'id="ca-mute"',
+                  'id="play-ctl"', 'id="ctl-pause"', 'id="ctl-mute"'];
     const missing = need.filter(s => html.indexOf(s) < 0);
-    assert('index.html 含设置面板 / HUD 武器栏 / 中继面板 / 画面内按钮（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
+    assert('index.html 含设置弹窗 / HUD / 中继面板 / 画面内菜单（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
+
+    /* 反向检查：原先画布上方的工具栏与页脚说明必须已经移除。
+     * 否则会出现「两套入口并存」——工具栏在手机上离拇指很远，用户以为没做改动。 */
+    const banned = ['class="toolbar"', '<footer', 'id="btn-start"', 'id="btn-pause"', 'id="set-panel"'];
+    const stillThere = banned.filter(s => html.indexOf(s) >= 0);
+    assert('index.html 已移除顶部工具栏与页脚说明（按钮全部搬进画面内）',
+      stillThere.length === 0, 'still=' + stillThere.join(','));
 
     /* 暂停同步：pause 与 start 都走同一条中继通路（服务器是纯透传，不解析类型）。
      * 两个方向都要验证——房主广播下行、客方请求上行。 */
@@ -502,11 +514,16 @@ function unit() {
   const wi = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText, txt = []; c.fillText = function(t){ txt.push(String(t)); }; drawItem({x:1,y:1,t:0,type:'flame'}); drawItem({x:1,y:1,t:0,type:'drill'}); c.fillText = orig; return txt; })()", context);
   assert('武器道具：地图上绘制字母 F / D', wi.indexOf('F') >= 0 && wi.indexOf('D') >= 0, JSON.stringify(wi));
 
-  // 结束 / 标题 / 过关界面排版：逐行累加 y，行与行不得重叠（曾出现「点按屏幕」压住「得分」）
+  // 结束 / 标题 / 过关界面排版：逐行累加 y，行与行不得重叠。
+  // 画面里的「点击下方按钮 或 按 Enter …」提示已删除：主入口改成画面内菜单，
+  // 再留一行「点下面按钮」的说明只会与按钮抢位置（手机屏幕本来就矮）。
   const ovl = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText; function cap(fn){ var rec = []; c.fillText = function(t,x,y){ rec.push({ t:String(t), y:y }); }; fn(); c.fillText = orig; return rec; } return { over: cap(drawOver), title: cap(drawTitle), clear: cap(drawClear) }; })()", context);
-  const gapsOk = arr => arr.length >= 3 && arr.every((r, i) => i === 0 || (r.y - arr[i-1].y) >= 20);
-  assert('GAME OVER 排版：4 行递增且行距充足（得分不被提示覆盖）', ovl.over.length === 4 && gapsOk(ovl.over), JSON.stringify(ovl.over));
-  assert('标题 / 过关排版：行与行不重叠', gapsOk(ovl.title) && gapsOk(ovl.clear), JSON.stringify({ title: ovl.title.length, clear: ovl.clear.length }));
+  const gapsOk = (arr, min) => arr.length >= min && arr.every((r, i) => i === 0 || (r.y - arr[i-1].y) >= 20);
+  assert('GAME OVER 排版：3 行递增且行距充足（得分不被提示覆盖）', ovl.over.length === 3 && gapsOk(ovl.over, 3), JSON.stringify(ovl.over));
+  assert('标题（4 行）/ 过关（2 行）排版：行距充足，且已无「点击下方按钮」文字',
+    gapsOk(ovl.title, 4) && gapsOk(ovl.clear, 2) &&
+    !ovl.over.concat(ovl.title, ovl.clear).some(r => /点击下方按钮|按 Enter/.test(r.t)),
+    JSON.stringify({ title: ovl.title.length, clear: ovl.clear.length }));
 
   // 地形离屏缓存：开局整张重建一次，之后无变化零重绘；打掉一块砖只重画 3x3 邻域
   const tc = vm.runInContext("(function(){ netMode='off'; player2=null; startGame(); var c = canvas.getContext('2d'); var oF = c.fillRect, n = 0; c.fillRect = function(){ n++; }; flushTerrain(); var full = n; n = 0; flushTerrain(); var idle = n; n = 0; render(); n = 0; flushTerrain(); var afterRender = n; n = 0; var hit = null; for (var r = 1; r < ROWS - 1 && !hit; r++) for (var cc = 1; cc < COLS - 1; cc++){ if (map[r][cc] !== BRICK) continue; var nb = 0; for (var dr = -1; dr <= 1; dr++) for (var dc = -1; dc <= 1; dc++){ if (!dr && !dc) continue; if (isTerrainCacheable(map[r+dr][cc+dc])) nb++; } if (nb > 0){ hit = [r, cc]; break; } } var boxes = []; c.fillRect = function(x,y,w,h){ n++; boxes.push([x,y,w,h]); }; if (hit) setTile(hit[0], hit[1], EMPTY); flushTerrain(); c.fillRect = oF; var outOfRange = hit ? boxes.filter(function(b){ return b[0] < (hit[1]-1)*TILE - 0.01 || b[1] < (hit[0]-1)*TILE - 0.01 || b[0]+b[2] > (hit[1]+2)*TILE + 0.01 || b[1]+b[3] > (hit[0]+2)*TILE + 0.01; }).length : 0; return { full: full, idle: idle, afterRender: afterRender, dirty: n, hit: hit, outOfRange: outOfRange, tile: map[hit[0]][hit[1]] }; })()", context);
