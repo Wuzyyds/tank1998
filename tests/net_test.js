@@ -203,11 +203,12 @@ async function integration() {
       if (noOrigin.socket) { try { noOrigin.socket.destroy(); } catch (e) {} }
     } finally { srv2.kill(); }
 
-    // 页面结构：设置弹窗（音量/血量档位/画面）、手机端 HUD、中继面板、画面内菜单必须存在，
+    // 页面结构：设置弹窗（音量/画面）、难度选择行、手机端 HUD、中继面板、画面内菜单必须存在，
     // 否则按钮静默失效（点了没反应，且不会有任何报错）
     const html = await (await fetch('http://127.0.0.1:' + PORT + '/')).text();
     const need = ['id="set-overlay"', 'id="vol-master"', 'id="vol-sfx"', 'id="vol-music"', 'id="chk-bgm"',
-                  'id="seg-hp"', 'id="set-fit"', 'id="set-fs"', 'id="set-flash"',
+                  'id="set-fit"', 'id="set-fs"', 'id="set-flash"',
+                  'id="diff-row"', 'id="diff-pick"',
                   'id="hud-weapon"', 'id="hud-weapon2"',
                   'id="relay-url"', 'id="btn-relay"', 'id="relay-now"', 'id="coop-lan"',
                   'id="center-actions"', 'id="ca-start"', 'id="ca-restart"', 'id="ca-resume"', 'id="ca-next"',
@@ -218,9 +219,10 @@ async function integration() {
 
     /* 反向检查：原先画布上方的工具栏与页脚说明必须已经移除。
      * 否则会出现「两套入口并存」——工具栏在手机上离拇指很远，用户以为没做改动。 */
-    const banned = ['class="toolbar"', '<footer', 'id="btn-start"', 'id="btn-pause"', 'id="set-panel"'];
+    const banned = ['class="toolbar"', '<footer', 'id="btn-start"', 'id="btn-pause"', 'id="set-panel"',
+                    'id="seg-hp"'];
     const stillThere = banned.filter(s => html.indexOf(s) >= 0);
-    assert('index.html 已移除顶部工具栏与页脚说明（按钮全部搬进画面内）',
+    assert('index.html 已移除顶部工具栏、页脚说明与「血量档位」（按钮全部搬进画面内）',
       stillThere.length === 0, 'still=' + stillThere.join(','));
 
     /* 暂停同步：pause 与 start 都走同一条中继通路（服务器是纯透传，不解析类型）。
@@ -312,6 +314,12 @@ function staticChecks() {
   assert('game.js 发送的消息类型都已在 server.js 转发白名单中（防静默丢弃）',
     notRelayed.length === 0,
     'missing=' + notRelayed.join(',') + ' | used=' + Array.from(used).join(','));
+
+  /* 快照发送条件：过关(clear) / 结束(over) 也必须发快照 —— 原先只在 playing 时发，
+   * 联机实测表现为「房主过关后客方画面冻住数秒，且永远看不到关卡完成 / GAME OVER」。 */
+  const snapOk = gjSrc.indexOf("} else if (state !== 'title' && Net.bufferedAmount() < 262144){") >= 0;
+  assert('房主在过关 / 结束时也发快照（否则客方停在上一帧、看不到结算界面）', snapOk,
+    snapOk ? '' : '未找到 clear/over 也发快照的条件');
 }
 
 /* ---------- CLI 配置校验 ----------
@@ -492,7 +500,10 @@ function unit() {
   // 手机端 DOM HUD：核心信息同步正确（触屏下 canvas 面板被 CSS 裁掉，信息改由 DOM 呈现）
   const hud = vm.runInContext("(function(){ netMode='off'; player2=null; score=1234; lives=2; lives2=3; level=7; player.power=3; enemyQueue=['basic','fast']; enemies=[]; syncHud(); var r={score:hudScore.textContent, lives:hudLives.textContent, level:hudLevel.textContent, power:hudPower.textContent, enemy:hudEnemy.textContent, coarse:coarsePointer}; score=0; return r; })()", context);
   assert('DOM HUD：分数补零为 6 位', hud.score === '001234', JSON.stringify(hud));
-  assert('DOM HUD：生命/关卡/火力/敌余同步正确', hud.lives === '♥♥' && hud.level === '07' && hud.power === 'Lv3' && hud.enemy === '02', JSON.stringify(hud));
+  assert('DOM HUD：生命/关卡/火力/敌余同步正确（关卡槽为「难度-关号」）', hud.lives === '♥♥' && hud.level === '2-2' && hud.power === 'Lv3' && hud.enemy === '02', JSON.stringify(hud));
+  /* 关卡槽要在 BOSS / 精英关带标记：难度 2 的第 4 关（精英）= level 9、第 5 关（BOSS）= level 10 */
+  const hudMark = vm.runInContext("(function(){ level = 10; syncHud(); var a = hudLevel.textContent; level = 9; syncHud(); var b = hudLevel.textContent; return { boss: a, elite: b }; })()", context);
+  assert('DOM HUD：关卡槽在 BOSS / 精英关带标记', hudMark.boss === '2-5·BOSS' && hudMark.elite === '2-4·精英', JSON.stringify(hudMark));
   assert('DOM HUD：非触屏环境不启用（coarsePointer=false，桌面走 canvas 面板）', hud.coarse === false);
 
   // 重开一局必须重置火力等级（基地被摧毁 / 生命耗尽后重开，不能带着上一局的火力）
@@ -520,7 +531,7 @@ function unit() {
   const ovl = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText; function cap(fn){ var rec = []; c.fillText = function(t,x,y){ rec.push({ t:String(t), y:y }); }; fn(); c.fillText = orig; return rec; } return { over: cap(drawOver), title: cap(drawTitle), clear: cap(drawClear) }; })()", context);
   const gapsOk = (arr, min) => arr.length >= min && arr.every((r, i) => i === 0 || (r.y - arr[i-1].y) >= 20);
   assert('GAME OVER 排版：3 行递增且行距充足（得分不被提示覆盖）', ovl.over.length === 3 && gapsOk(ovl.over, 3), JSON.stringify(ovl.over));
-  assert('标题（4 行）/ 过关（2 行）排版：行距充足，且已无「点击下方按钮」文字',
+  assert('标题（4 行）/ 过关（3~4 行：完成 / 得分 / 倒计时）排版：行距充足，且已无「点击下方按钮」文字',
     gapsOk(ovl.title, 4) && gapsOk(ovl.clear, 2) &&
     !ovl.over.concat(ovl.title, ovl.clear).some(r => /点击下方按钮|按 Enter/.test(r.t)),
     JSON.stringify({ title: ovl.title.length, clear: ovl.clear.length }));

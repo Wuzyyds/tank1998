@@ -9,6 +9,7 @@
  *   - 客方首帧快照 → state=playing、body.idle 解除（摇杆可见）
  *   - 客方输入 → 房主侧玩家2 位移 → 客方收到的快照位置一致
  *   - 松手即停、暂停双向同步
+ *   - 房主过关自动继续 → 客方看到过关界面并跟随进入下一关
  *
  * 运行：node tools/e2e_coop.js     （占用 8399 端口，跑完自动退出）
  */
@@ -46,6 +47,7 @@ OPEN      = function(){ if (__netOpen) __netOpen(); };
 SET_ROLE  = function(role, code){ netMode = role; if (code) coopRoomCode = code; };
 SET_KEYS2 = function(o){ keys2 = o; };
 PAUSE     = function(){ togglePause(); };
+FORCE_CLEAR = function(){ enemyQueue.length = 0; enemies.length = 0; };
 GET = function(){ return {
   state: state, paused: paused, netMode: netMode, level: level,
   idle: document.body.classList.contains('idle'),
@@ -122,6 +124,7 @@ function makeSandbox(name){
     open(){ context.OPEN(); },
     setKeys2(o){ context.SET_KEYS2(o); },
     pause(){ context.PAUSE(); },
+    forceClear(){ context.FORCE_CLEAR(); },
   };
 }
 
@@ -233,6 +236,29 @@ function waitMsg(sb, pred, timeout = 2000){
     const hp = host.get(), gp = guest.get();
     A('E9 客方按暂停 → 两边同时暂停', hp.paused === true && gp.paused === true,
       'host=' + hp.paused + ' guest=' + gp.paused + ' host收到pause=' + JSON.stringify(stat.pauseV));
+
+    /* 7. 过关自动继续：房主清光敌人 → clear → 倒计时结束自动进下一关 → 客方跟随。
+     * v1.6.0 的新行为，也是最容易两边关卡错位的地方，必须跨端验证。 */
+    host.pause();                        // 先取消暂停（E9 把两边都停住了）
+    host.flush(hWS);
+    await sleep(60);
+    guest.feed();
+    const hResumed = host.get().paused === false;
+    host.forceClear();
+    await run(4);
+    const hClear = host.get(), gClear = guest.get();
+    A('E10 房主清光敌人 → 房主进入 clear，且客方也看到过关界面',
+      hResumed && hClear.state === 'clear' && gClear.state === 'clear',
+      'resumed=' + hResumed + ' host=' + hClear.state + ' guest=' + gClear.state);
+
+    await run(300);                      // 4 秒倒计时（≈240 帧）后应自动进入下一关
+    const hNext = host.get(), gNext = guest.get();
+    A('E11 过关自动继续：房主自动进入下一关（难度-关号推进）',
+      hNext.state === 'playing' && hNext.level === hClear.level + 1,
+      'lvl ' + hClear.level + ' -> ' + hNext.level + ' state=' + hNext.state);
+    A('E12 客方关卡跟随房主（跨端一致，不会各自推进）',
+      gNext.level === hNext.level && gNext.state === 'playing',
+      'host lvl=' + hNext.level + ' guest lvl=' + gNext.level + ' guest state=' + gNext.state);
 
   } catch (e) {
     A('端到端执行无异常', false, (e && e.message) || String(e));

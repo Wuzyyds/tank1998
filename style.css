@@ -27,15 +27,14 @@ body.fit canvas { width:min(100vw, calc(100vh * 680 / 520)); border-width:0; bor
 .set-sec { margin:16px 0 6px; font-size:13px; color:#8b949e; letter-spacing:1px;
   border-top:1px solid #21262d; padding-top:12px; }
 .set-sec-note { font-size:11.5px; color:#6e7681; letter-spacing:0; }
-.set-row.seg { gap:8px; }
 .set-row.btnrow { gap:8px; flex-wrap:wrap; }
 .set-tip { margin-top:12px; font-size:12px; color:#8b949e; line-height:1.5; }
 .set-keys { font-size:12.5px; color:#8b949e; line-height:1.7; }
-.set-btn, .seg-btn { flex:1; min-width:104px; font-family:inherit; font-size:13.5px; cursor:pointer;
+.set-btn { flex:1; min-width:104px; font-family:inherit; font-size:13.5px; cursor:pointer;
   background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:9px; padding:10px 12px;
   white-space:nowrap; }
-.set-btn:hover, .seg-btn:hover { background:#30363d; }
-.set-btn.on, .seg-btn.on { background:#1f6feb; border-color:#388bfd; color:#fff; }
+.set-btn:hover { background:#30363d; }
+.set-btn.on { background:#1f6feb; border-color:#388bfd; color:#fff; }
 
 /* ================= 联机状态横幅 ================= */
 /* 压在游戏区顶部，深色底 + 金色高对比文字。手机端客方在「等待房主 / 房主掉线 /
@@ -194,6 +193,18 @@ body:not(.idle) #play-ctl { display:flex; }
 .ca-btn.primary:hover { background:#388bfd; }
 .ca-btn:hover { background:#30363d; }
 .ca-btn:active { transform:translateY(1px); }
+/* 难度选择行：标题页菜单最上面独占一行（flex-basis:100%，与 .ca-btn.wide 同一套换行逻辑）。
+ * #center-actions 整体 pointer-events:none，所以按钮要自己打开 pointer-events。 */
+.diff-row { flex-basis:100%; display:flex; align-items:center; justify-content:center; gap:9px; }
+.diff-lab { font-size:13px; color:#A9B4C0; }
+.diff-btns { display:flex; gap:6px; }
+.diff-btn { pointer-events:auto; font-family:inherit; font-size:14px; font-weight:600;
+  min-width:34px; padding:8px 0; border-radius:10px; cursor:pointer;
+  background:rgba(33,38,45,.94); color:#c9d1d9; border:1px solid #30363d;
+  box-shadow:0 3px 14px rgba(0,0,0,.55); -webkit-tap-highlight-color:transparent; }
+.diff-btn:hover { background:#30363d; }
+/* 选中的难度用金色实底：与蓝色主按钮（开始游戏）区分开，避免误认为也是「按下即开始」 */
+.diff-btn.on { background:#F0C040; border-color:#F0C040; color:#0d1117; }
 
 /* ================= 触屏布局 =================
  * canvas 逻辑宽 680 含右侧 160px 面板，在小屏等比缩小后字号仅约 6px 不可读；
@@ -244,6 +255,7 @@ body:not(.idle) #play-ctl { display:flex; }
   /* 触屏按钮比桌面略小一号：画面在手机上被缩到 0.7 倍左右，
    * 沿用桌面的 16px 会让按钮相对画面显得过重、也更容易顶到标题文字。 */
   .ca-btn { font-size:15px; padding:11px 16px; border-radius:13px; }
+  .diff-btn { min-width:42px; padding:10px 0; font-size:16px; }
   .codex-tab { padding:10px 16px; font-size:15px; }
   .codex-box { width:96vw; }
 }

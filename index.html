@@ -58,6 +58,13 @@
      原先这些按钮在画布上方的工具栏里，手机上离拇指很远；现在整套搬进画面，
      由 syncCenterActions() 按「当前状态」显示其中一组（见 game.js 的 CA_BTNS）。 -->
 <div id="center-actions">
+  <!-- 难度选择：1~5 级，每级 5 关（第 5 关为 BOSS 关）。取代原先设置里的「血量档位」，
+       是手机端唯一的难度入口，按钮由 buildDiffPick() 生成。
+       联机时难度由房主决定，客方这一行会被隐藏（避免「点了没反应」）。 -->
+  <div id="diff-row" class="diff-row">
+    <span class="diff-lab">难度</span>
+    <span id="diff-pick" class="diff-btns"></span>
+  </div>
   <button id="ca-start"   class="ca-btn primary wide">▶ 开始游戏</button>
   <button id="ca-next"    class="ca-btn primary wide">⏭ 下一关</button>
   <button id="ca-resume"  class="ca-btn primary wide">▶ 继续</button>
@@ -190,8 +197,8 @@
           <div class="cx-desc">每档第 5 关（BOSS 关）压轴，紫色、必掉双道具、伤害高。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge cx-badge-wide" style="background:#30363D;color:#FF8A6B">阶梯</span><div>
-          <div class="cx-name">难度阶梯 & 精英关</div>
-          <div class="cx-desc">每 5 关一档：新兵→老兵→精锐→王牌→噩梦，速度/血量/AI/总数逐档提升。每档第 4 关为精英关（前插装甲/火力精英），第 5 关为 BOSS 关。</div>
+          <div class="cx-name">难度 1~5 &amp; 精英关</div>
+          <div class="cx-desc">难度分 1~5 级，每级 5 关，第 5 关为 BOSS 关：新兵→老兵→精锐→王牌→噩梦，速度 / 敌人血量 / AI / 敌军总数逐级提升。每级第 4 关为精英关（前插装甲 / 火力精英）。通关一级后自动进入下一级；难度 5 通关则回到难度 1 重新开始。</div>
         </div></div>
       </div>
       <!-- 机制 -->
@@ -207,6 +214,10 @@
         <div class="cx-row"><span class="cx-badge" style="background:#46B455;color:#fff">命</span><div>
           <div class="cx-name">命数</div>
           <div class="cx-desc">初始 2 条命；得分每满 2000 分奖 1 条命（上限 6）。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#FF5B5B;color:#fff">血</span><div>
+          <div class="cx-name">一击必死</div>
+          <div class="cx-desc">玩家坦克固定 1 点血：被任何一发命中即损失一条命。Lv2/Lv3 火力可先降一级抵掉一次伤害。觉得太难请在标题页调低难度（1 级敌人最少最弱，5 级最凶）。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#7FD0FF;color:#0d1117">落</span><div>
           <div class="cx-name">武器掉落</div>
@@ -253,9 +264,10 @@
     <div id="coop-status" class="coop-status"></div>
   </div>
 </div>
-<!-- 设置：分项音量 + 背景音乐 + 血量档位 + 画面（全图 / 全屏 / 闪烁）
+<!-- 设置：分项音量 + 背景音乐 + 画面（全图 / 全屏 / 闪烁）
      原先这些散落在页面顶部工具栏与键盘快捷键里，手机上够不到；
-     统一收进这个弹窗，并保留键盘快捷键（P/M/F/G/H）不变。 -->
+     统一收进这个弹窗，并保留键盘快捷键（P/M/F/G/H）不变。
+     「血量档位」在 v1.6.0 移除：玩家血量恒为 1 血，容错改由难度承担。 -->
 <div id="set-overlay" class="overlay">
   <div class="modal-box">
     <div class="codex-head">
@@ -266,8 +278,6 @@
     <label class="set-row"><span>音效</span><input type="range" id="vol-sfx" min="0" max="100" step="5" value="95"></label>
     <label class="set-row"><span>音乐</span><input type="range" id="vol-music" min="0" max="100" step="5" value="65"></label>
     <label class="set-row chk"><input type="checkbox" id="chk-bgm" checked><span>播放背景音乐</span></label>
-    <div class="set-sec">血量档位<span class="set-sec-note">（桌面端也可按 H 键循环切换）</span></div>
-    <div class="set-row seg" id="seg-hp"></div>
     <div class="set-sec">画面</div>
     <div class="set-row btnrow">
       <button id="set-fit"   class="set-btn">⛶ 全图模式</button>
@@ -276,7 +286,7 @@
     </div>
     <div class="set-tip">背景音乐为程序实时生成，不额外下载素材；以上设置会自动记住。</div>
     <div class="set-sec">键盘快捷键<span class="set-sec-note">（桌面端）</span></div>
-    <div class="set-keys">方向键 / WASD 移动 · 空格 射击 · Enter 开始 · P 暂停 · M 静音 · F 全屏 · G 全图 · H 血量档位</div>
+    <div class="set-keys">方向键 / WASD 移动 · 空格 射击 · Enter 开始 · P 暂停 · M 静音 · F 全屏 · G 全图 · H 切换难度（标题页）</div>
   </div>
 </div>
 <script>

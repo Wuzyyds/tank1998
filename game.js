@@ -45,14 +45,12 @@ const SLOW_TIME_P = 2.5, SLOW_MUL_P = 0.60;                     // 对玩家：�
 const OVERHEAT_TIME = 1.5; // 玩家被点燃：枪管过热 1.5 秒无法射击（不直接致死）
 const CLASH_CD    = 0.4;   // 子弹吞噬冷却：一次交火最多被削一级
 
-/* ---- 玩家血量档位（标题页 H 键切换，默认经典一击必死） ---- */
-const PLAYER_HP_MODES = [
-  { hp: 1, label: '经典' },
-  { hp: 2, label: '标准' },
-  { hp: 3, label: '宽容' },
-];
-let hpMode = 0;
-function playerMaxHp(){ return PLAYER_HP_MODES[hpMode].hp; }
+/* ---- 玩家血量：恒定 1 血（一击必死，原版手感） ----
+ * v1.6.0 起移除「经典 1 血 / 标准 2 血 / 宽容 3 血」的可选档位：
+ * 容错改由「难度」承担（低级难度敌人更少更弱），玩家血量固定为 1，规则更单纯。
+ * 多血机制本身保留在 damageTank / drawHpPips 里，供敌人与显式设了 maxHp 的单位复用。 */
+const PLAYER_HP = 1;
+function playerMaxHp(){ return PLAYER_HP; }
 
 const ETYPES = {
   basic: { speed:1.6, hp:1, score:100, fire:2.4, body:'#C8CCD2', dark:'#6B7178' },
@@ -83,6 +81,35 @@ function tier(){ return TIERS[tierIndex()]; }
 function isBossLevel(){ return level % TIER_SPAN === 0; }
 function isEliteLevel(){ return !isBossLevel() && (level % TIER_SPAN) === TIER_SPAN - 1; }
 function levelTag(){ return isBossLevel() ? 'BOSS' : (isEliteLevel() ? '精英关' : tier().name); }
+
+/* ---- 难度（v1.6.0）：1~5 级，每级 5 关、第 5 关为 BOSS 关 ----
+ * 这正是 TIERS × TIER_SPAN 的现成结构，所以「难度」不新增状态字段，
+ * 而是直接映射成 level 的区间：
+ *     难度 N 覆盖 level (N-1)*5+1 ~ N*5，level 在 1..25 之间循环。
+ * 于是 tier() / isBossLevel() / isEliteLevel() / themeForLevel() 全部沿用
+ * 「按 level 推导」的旧逻辑，一行都不用改；联机快照里的 lvl 依旧是唯一真值，
+ * 客方跟着 level 走 —— 两边难度天然一致，网络协议零改动。 */
+function diffTotalLevels(){ return TIERS.length * TIER_SPAN; }      // 25
+function diffStartLevel(d){ return (d - 1) * TIER_SPAN + 1; }        // 难度 d 的第 1 关
+function curDiff(){ return Math.min(TIERS.length, tierIndex() + 1); } // 当前难度 1~5
+function stageInDiff(){ return ((level - 1) % TIER_SPAN) + 1; }      // 档内第几关 1~5
+function diffName(d){ return (TIERS[d - 1] || TIERS[0]).name; }
+/* 标题页选定的起始难度（1~5），持久化记住；开始游戏时映射成起始 level。 */
+let startDiff = 1;
+try {
+  const sd = Math.round(Number(localStorage.getItem('tank1998_diff')));
+  if (sd >= 1 && sd <= TIERS.length) startDiff = sd;
+} catch(e) {}
+function setDiffStart(d){
+  const n = TIERS.length;
+  d = Math.round(Number(d));
+  if (!isFinite(d)) return startDiff;
+  startDiff = ((d - 1) % n + n) % n + 1;      // 越界 / 负数安全回绕
+  try { localStorage.setItem('tank1998_diff', String(startDiff)); } catch(e) {}
+  sfx.item();
+  syncDiffPick();
+  return startDiff;
+}
 const ELITE_TYPES = ['armor', 'power'];
 const ELITE_COUNT = 3;
 const ITEM_TYPES = ['star','grenade','shield','clock','tank','amphibious','eagle'];
@@ -840,6 +867,8 @@ let playerEagle = 0;        // 老鹰无敌剩余时间（秒）
 let levelIntro = 0;         // FC 经典幕布开场剩余时间（秒）
 const LEVEL_INTRO_TIME = 1.6;
 let startLockT = 0;         // 结束/过关后的误触保护：此时间点前忽略“开始”请求
+let clearHoldT = 0;         // 过关界面自动继续的剩余秒数（0 = 不自动）
+const CLEAR_HOLD_SEC = 4.0; // 过关界面停留时长：够看清得分，又不必手动点按钮
 let paused = false, muted = false, gameTime = 0;
 try { muted = localStorage.getItem('tank1998_muted') === '1'; } catch(e) {}   // 静音设置持久化
 let keys = {};
@@ -1534,8 +1563,9 @@ function damageTank(t, n, src){
   } else {
     addExplosion(t.px, t.py, 'spark');
     sfx.steel();
-    // 多血档位：受击后 1 秒无敌，避免被连击瞬间打穿
-    if (t.isPlayer && playerMaxHp() > 1) t.invuln = Math.max(t.invuln, 1.0);
+    // 多血单位：非致命受击后 1 秒无敌，避免被连击瞬间打穿。
+    // 玩家固定 1 血时走不到这里；敌人与显式设了 maxHp 的单位仍然生效。
+    if (t.isPlayer && t.maxHp > 1) t.invuln = Math.max(t.invuln, 1.0);
   }
   return true;
 }
@@ -1830,13 +1860,15 @@ function startLevel(fresh){
     addSpawnFx(player2.px, player2.py);
   }
   refreshFields();
+  clearHoldT = 0;        // 开新关：清掉过关倒计时，避免残留把下一关又推进去
   state = 'playing';
   if (paused) setPaused(false, true);   // 开局即解除暂停（并把「继续」同步给客方）
 }
 
 function startGame(){
-  score = 0; lives = 2; level = 1; lives2 = 2;
+  score = 0; lives = 2; lives2 = 2;
   nextExtraLifeScore = 2000;
+  level = diffStartLevel(startDiff);   // 从标题页选定的难度开始
   startLevel(true);   // 重开一局：火力等级归 1
 }
 
@@ -1851,8 +1883,11 @@ function addScore(n){
   }
 }
 
+/* 进入下一关。level 在 1..25 之间循环，所以「难度 5 的第 5 关（BOSS）」过关后
+ * 会自动回到难度 1 的第 1 关，难度档位与地貌整体重来一轮。
+ * 玩家看到的结构因此始终是：每级 5 关、第 5 关 BOSS，通关后自动接下一级。 */
 function nextLevel(){
-  level++;
+  level = (level % diffTotalLevels()) + 1;
   startLevel();
 }
 
@@ -1888,12 +1923,20 @@ function update(dt){
     if (!enemyQueue.length && !enemies.length && playerTargets().length > 0){
       state = 'clear';
       startLockT = gameTime + 0.8;   // 过关瞬间防误触
+      clearHoldT = CLEAR_HOLD_SEC;   // 过关界面自动继续倒计时（手机端不必再点按钮）
       sfx.clear();
       if (score > hiScore){
         hiScore = score;
         try { localStorage.setItem('tank1998_hi', String(hiScore)); } catch(e) {}
       }
     }
+  }
+  /* 过关界面自动继续：倒计时结束就自动进入下一关，手机端不用再去点按钮。
+   * 客方不自己走流程（否则两边关卡会错位）—— 一切场景切换由房主推进、快照跟随。
+   * 暂停时倒计时冻结，避免暂停中「偷偷过关」。 */
+  if (state === 'clear' && clearHoldT > 0 && !paused && netMode !== 'guest'){
+    clearHoldT -= dt;
+    if (clearHoldT <= 0){ clearHoldT = 0; nextLevel(); }
   }
   for (const ex of explosions) ex.t += dt;
   let xw = 0;
@@ -2773,7 +2816,8 @@ function syncHud(){
   setHud(hudScore,  String(score).padStart(6, '0'));
   setHud(hudLives,  lives  > 0 ? hearts(lives)  : '—');
   setHud(hudLives2, lives2 > 0 ? hearts(lives2) : '—');
-  setHud(hudLevel,  String(level).padStart(2, '0') + (isBossLevel() ? '·BOSS' : (isEliteLevel() ? '·精英' : '')));
+  /* 关卡槽改成「难度-关号」：手机用户一眼看出自己在第几级难度的第几关 */
+  setHud(hudLevel,  curDiff() + '-' + stageInDiff() + (isBossLevel() ? '·BOSS' : (isEliteLevel() ? '·精英' : '')));
   const isCoop = (netMode !== 'off' || !!player2);
   const pw1 = (player && player.power) || 1, pw2 = (player2 && player2.power) || 1;
   /* 火力与武器都挂在各自坦克上：双人时按 P1/P2 并列展示，玩家2 的升级才有反馈 */
@@ -2804,7 +2848,7 @@ function paintOverlayText(lines, topY){
 }
 /* 标题 / 结束 / 过关三块界面是**静态**的，却每帧都要把 8~9 行中文重新光栅化一遍，
  * 这在手机上并不便宜。改为把整屏画到离屏精灵，内容不变时每帧只需一次 drawImage。
- * key 由文字内容拼成：切血量档位或分数变化会自动重新烘焙。 */
+ * key 由文字内容拼成：切难度、分数变化或倒计时跳秒时自动重新烘焙。 */
 function overlayText(lines, topY){
   if (topY === undefined) topY = 190;
   let key = String(topY);
@@ -2839,11 +2883,37 @@ function drawOver(){
     { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:0 },
   ], 185);
 }
+/* 过关界面：三种情况
+ *   ① 普通关卡 → 「难度 N · 第 M 关 完成」
+ *   ② 该难度第 5 关（BOSS）→ 「难度 N 通关！」，并预告下一级
+ *   ③ 难度 5 的 BOSS 关 → 全难度通关，回到难度 1 重新开始
+ * 末行是自动继续倒计时；点画面或按钮可立即跳过。
+ * 「本次是否通关」直接由 isBossLevel() 判断 —— 过关瞬间 level 尚未推进，
+ * 所以房主与客方（纯快照驱动）看到的是同一套文案，不需要额外同步标记。 */
 function drawClear(){
-  overlayText([
-    { text:'关卡 ' + level + ' 完成!', size:'bold 44px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:70 },
-    { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:0 },
-  ], 200);
+  const guest = (netMode === 'guest');
+  const sec = guest ? 0 : Math.max(0, Math.ceil(clearHoldT));
+  const tail = { text: guest ? '等待房主继续…'
+                             : (sec > 0 ? (sec + ' 秒后自动继续…') : '正在继续…'),
+                 size:'14px sans-serif', color:'#98A2AD', gap:0 };
+  if (isBossLevel()){
+    const last = curDiff() >= TIERS.length;
+    overlayText([
+      { text:'难度 ' + curDiff() + ' 通关！', size:'bold 42px "Microsoft YaHei",sans-serif', color:'#7FD0FF', gap:62 },
+      { text: last ? '全部难度通关 · 回到难度 1 重新开始'
+                   : '即将进入 难度 ' + (curDiff() + 1) + ' · ' + diffName(curDiff() + 1),
+        size:'17px "Microsoft YaHei",sans-serif', color:'#C9D1D9', gap:42 },
+      { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:34 },
+      tail,
+    ], 168);
+  } else {
+    overlayText([
+      { text:'难度 ' + curDiff() + ' · 第 ' + stageInDiff() + ' 关 完成',
+        size:'bold 40px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:62 },
+      { text:'得分 ' + score, size:'20px sans-serif', color:'#FFFFFF', gap:38 },
+      tail,
+    ], 185);
+  }
 }
 /* 事件提示：敌军增援 / 手雷警示 / 获得武器 */
 function drawHint(){
@@ -2888,7 +2958,7 @@ function drawCurtain(){
     ctx.textAlign = 'center';
     ctx.fillStyle = boss ? '#D9A9FF' : '#FFFFFF';
     ctx.font = 'bold 32px "Microsoft YaHei",sans-serif';
-    ctx.fillText('STAGE ' + level, PLAY_W/2, PLAY_H/2 - 16);
+    ctx.fillText('STAGE ' + curDiff() + '-' + stageInDiff(), PLAY_W/2, PLAY_H/2 - 16);
     ctx.fillStyle = boss ? '#B14BFF' : '#F0C040';
     ctx.font = 'bold 16px "Microsoft YaHei",sans-serif';
     ctx.fillText(levelTag() + ' · 地貌 ' + levelThemeName, PLAY_W/2, PLAY_H/2 + 12);
@@ -3258,7 +3328,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyG') toggleFit();
   if (e.code === 'KeyE') debugDropEagle();
   if (e.code === 'KeyH' && state === 'title'){
-    setHpMode(hpMode + 1);
+    setDiffStart(startDiff + 1);   // 桌面端：标题页 H 键循环切难度（等价于手机端的难度按钮）
   }
 });
 window.addEventListener('keyup', e => setKey(e.code, false));
@@ -3353,7 +3423,7 @@ if (joy && joyKnob){
  * 手机端离拇指太远，还要额外占掉宝贵的竖向空间。
  * 现在：标题页给一屏画面内菜单（#center-actions），
  *       对局中只留右上角的「暂停 / 音效」（#play-ctl）。
- * 键盘快捷键一律保留：P 暂停 / M 静音 / F 全屏 / G 全图 / H 血量档位。 */
+ * 键盘快捷键一律保留：P 暂停 / M 静音 / F 全屏 / G 全图 / H 切换难度（标题页）。 */
 const ctlPause   = document.getElementById('ctl-pause');
 const ctlMute    = document.getElementById('ctl-mute');
 const caStart    = document.getElementById('ca-start');
@@ -3369,7 +3439,8 @@ const setOverlay = document.getElementById('set-overlay');
 const setFit     = document.getElementById('set-fit');
 const setFs      = document.getElementById('set-fs');
 const setFlash   = document.getElementById('set-flash');
-const segHp      = document.getElementById('seg-hp');
+const diffRow    = document.getElementById('diff-row');    // 难度选择行（标题页菜单）
+const diffPick   = document.getElementById('diff-pick');   // 难度选择行里的一排按钮
 
 function toggleFit(){
   document.body.classList.toggle('fit');
@@ -3421,7 +3492,7 @@ function syncMuteBtn(){
   if (caMute){ caMute.textContent = muted ? '🔇 静音' : '🔊 音效'; caMute.classList.toggle('on', muted); }
 }
 
-/* ---- 设置弹窗：主音量 / 音效 / 音乐 / 背景音乐 / 血量档位 / 画面 ---- */
+/* ---- 设置弹窗：主音量 / 音效 / 音乐 / 背景音乐 / 画面 ---- */
 const volMaster  = document.getElementById('vol-master');
 const volSfx     = document.getElementById('vol-sfx');
 const volMusic   = document.getElementById('vol-music');
@@ -3431,7 +3502,6 @@ function syncSetPanel(){
   if (volSfx)    volSfx.value    = String(Math.round(VOL.sfx * 100));
   if (volMusic)  volMusic.value  = String(Math.round(VOL.music * 100));
   if (chkBgm)    chkBgm.checked  = bgmOn;
-  syncHpSeg();
   syncReduceMotionBtn();
   if (setFit && document.body && document.body.classList){
     setFit.classList.toggle('on', document.body.classList.contains('fit'));
@@ -3476,31 +3546,32 @@ if (setOverlay){
 }
 window.addEventListener('keydown', e => { if (e.key === 'Escape'){ showCodex(false); showSet(false); } });
 
-/* ---- 血量档位（原先只有键盘 H 能切，手机用户压根没有入口） ---- */
-function buildHpSeg(){
-  if (!segHp || typeof segHp.appendChild !== 'function') return;   // 无 DOM 的环境（测试桩）直接跳过
-  segHp.textContent = '';
-  PLAYER_HP_MODES.forEach((m, i) => {
+/* ---- 难度选择（标题页菜单里的一行 5 格）----
+ * v1.6.0 起取代「血量档位」的位置：容错不再由玩家血量决定，而是由难度决定。
+ * 手机端唯一的难度入口（桌面端另有 H 键循环切换）；联机时由房主决定。 */
+function buildDiffPick(){
+  if (!diffPick || typeof diffPick.appendChild !== 'function') return;   // 测试桩 / 无 DOM 环境直接跳过
+  diffPick.textContent = '';
+  for (let d = 1; d <= TIERS.length; d++){
     const b = document.createElement('button');
-    b.className = 'seg-btn' + (i === hpMode ? ' on' : '');
-    b.textContent = m.label + ' ' + m.hp + ' 血';
-    b.setAttribute('data-hp', String(i));
-    b.addEventListener('click', () => setHpMode(i));
-    segHp.appendChild(b);
+    b.className = 'diff-btn' + (d === startDiff ? ' on' : '');
+    b.textContent = String(d);
+    b.title = '难度 ' + d + ' · ' + diffName(d);
+    b.setAttribute('data-diff', String(d));
+    b.addEventListener('click', () => pickDiff(d));
+    diffPick.appendChild(b);
+  }
+}
+function syncDiffPick(){
+  if (!diffPick || typeof diffPick.querySelectorAll !== 'function') return;
+  diffPick.querySelectorAll('.diff-btn').forEach(b => {
+    b.classList.toggle('on', Number(b.getAttribute('data-diff')) === startDiff);
   });
 }
-function setHpMode(i){
-  const n = PLAYER_HP_MODES.length;
-  hpMode = ((i % n) + n) % n;
-  if (player){ player.maxHp = playerMaxHp(); player.hp = player.maxHp; }
-  sfx.item();
-  syncHpSeg();
-}
-function syncHpSeg(){
-  if (!segHp || typeof segHp.querySelectorAll !== 'function') return;
-  segHp.querySelectorAll('.seg-btn').forEach(b => {
-    b.classList.toggle('on', Number(b.getAttribute('data-hp')) === hpMode);
-  });
+function pickDiff(d){
+  if (netMode === 'guest') return;     // 客方不选难度，等房主开局
+  initAudio();
+  setDiffStart(d);
 }
 /* 暂停状态的唯一入口。双人下暂停是「全局」的：任一方按暂停，另一方也停。
  * sync=true 表示本次由本机用户发起，需要把状态广播给对端（房主=权威广播，
@@ -3527,7 +3598,7 @@ function syncReduceMotionBtn(){
   setFlash.textContent = reduceMotion ? '⚡ 闪烁：减弱' : '⚡ 闪烁：正常';
   setFlash.classList.toggle('on', reduceMotion);
 }
-buildHpSeg();
+buildDiffPick();
 syncReduceMotionBtn();
 syncMuteBtn();        // 按钮就位后再同步（muted 已从 localStorage 恢复）
 syncSetPanel();
@@ -3540,6 +3611,7 @@ syncSetPanel();
  * 用状态串缓存，避免每帧都写 DOM。 */
 const centerActions = document.getElementById('center-actions');
 const CA_BTNS = [
+  [diffRow,   'title'],        // 难度选择：只在标题页出现（联机时由房主决定，见下）
   [caStart,   'title'],
   [caNext,    'clear'],
   [caResume,  'paused'],
@@ -3562,6 +3634,8 @@ function syncCenterActions(){
   /* idle = 不在「真正对局中」：摇杆 / 开火键让位给菜单按钮，避免两者抢同一块位置 */
   if (document.body && document.body.classList) document.body.classList.toggle('idle', slot !== 'playing');
   for (const it of CA_BTNS) caShow(it[0], it[1].split(' ').indexOf(slot) >= 0);
+  /* 联机客方的难度由房主决定：即使在标题页也隐藏选择行，避免「点了没反应」 */
+  if (netMode === 'guest' && diffRow && diffRow.style) diffRow.style.display = 'none';
 }
 if (caStart)   caStart.addEventListener('click',   () => { initAudio(); enterMobileFullscreen(); requestStart(); });
 if (caNext)    caNext.addEventListener('click',    () => { initAudio(); requestStart(); });
@@ -3593,7 +3667,8 @@ if (caTitle)   caTitle.addEventListener('click',   () => {
  * 所以敌人与幕布都不会动）。房主切场景后补发一帧快照，客方才能跟着回标题。 */
 function toTitle(){
   if (netMode === 'guest') return;      // 客方不自行切场景，等房主
-  score = 0; lives = 2; lives2 = 2; level = 1; nextExtraLifeScore = 2000;
+  score = 0; lives = 2; lives2 = 2; nextExtraLifeScore = 2000;
+  level = diffStartLevel(startDiff);
   startLevel(true);
   state = 'title';
   levelIntro = 0;
@@ -3673,8 +3748,11 @@ function loop(now){
           // 4Hz 暂停心跳：兜住 pause 消息丢包，让客方跟上暂停/继续
           pauseBeat += 0.05;
           if (pauseBeat >= 0.25){ pauseBeat = 0; Net.send({ type:'pause', v:1 }); }
-        } else if (state === 'playing' && Net.bufferedAmount() < 262144){
-          // 背压：上行积压时跳过一次快照，避免弱网下雪崩（输入包极小，永不跳过）
+        } else if (state !== 'title' && Net.bufferedAmount() < 262144){
+          /* 背压：上行积压时跳过一次快照，避免弱网下雪崩（输入包极小，永不跳过）。
+           * 过关(clear) 与结束(over) 也必须发：这两个状态原先完全不发快照，
+           * 客方就停在上一帧的「playing」不动 —— 过关时看起来像卡死，
+           * 而且永远看不到「关卡完成」与「GAME OVER」界面（联机实测发现）。 */
           Net.send({ type:'state', snap: serializeSnapshot() });
         }
       } else if (netMode === 'guest'){

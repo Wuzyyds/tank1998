@@ -349,16 +349,22 @@ const hpHold = player.hp; player.burnT = 2.0; player.burnAcc = 0; player.invuln 
 for (let i = 0; i < 30; i++) update(0.05);
 assert('I14 幕布开场期间燃烧不结算（世界静止）', player.hp === hpHold, 'hp=' + player.hp);
 
-/* ---------- J. 血量与血条 ---------- */
-assert('J1 默认经典档位玩家 1 血', playerMaxHp() === 1, 'hp=' + playerMaxHp());
-hpMode = 1; const P2 = makeTank(8, 24, 0, 'player', {});
-assert('J2 标准档位玩家 2 血', P2.maxHp === 2 && P2.hp === 2, 'hp=' + P2.hp);
+/* ---------- J. 血量与血条 ----------
+ * v1.6.0：血量档位已删除，玩家固定 1 血（一击必死），容错改由难度承担。
+ * 多血机制本身仍保留给「显式设了 maxHp 的单位」，这里一并锁住不回归。 */
+assert('J1 玩家固定 1 血（血量档位已并入难度）', playerMaxHp() === 1, 'hp=' + playerMaxHp());
+const P2 = makeTank(8, 24, 0, 'player', {});
+assert('J2 玩家坦克出生即 1 血', P2.maxHp === 1 && P2.hp === 1, 'hp=' + P2.hp + '/' + P2.maxHp);
 P2.invuln = 0; damageTank(P2, 1, 'bullet');
-assert('J3 2 血挨一发不死且进入 1 秒无敌', P2.dead === false && P2.hp === 1 && P2.invuln > 0.9,
-       'hp=' + P2.hp + ' invuln=' + P2.invuln.toFixed(2));
-P2.invuln = 0; damageTank(P2, 1, 'bullet');
-assert('J4 第二发致死', P2.dead === true, 'dead=' + P2.dead);
-hpMode = 0;
+assert('J3 玩家挨一发即死（一击必死）', P2.dead === true, 'dead=' + P2.dead);
+/* 多血单位：非致命受击补 1 秒无敌，否则连击会瞬间打穿 */
+const MT = makeTank(8, 24, 0, 'player', {}); MT.maxHp = 3; MT.hp = 3; MT.invuln = 0;
+damageTank(MT, 1, 'bullet');
+assert('J4 多血单位非致命受击 → 扣 1 血并进入 1 秒无敌',
+       MT.dead === false && MT.hp === 2 && MT.invuln > 0.9,
+       'hp=' + MT.hp + ' invuln=' + MT.invuln.toFixed(2));
+MT.invuln = 0; damageTank(MT, 1, 'bullet');
+assert('J4b 再挨一发才到 1 血（仍未死）', MT.dead === false && MT.hp === 1, 'hp=' + MT.hp);
 const ARM = makeTank(6, 6, 2, 'armor', {});
 assert('J5 armor 仍为 4 血', ARM.maxHp === 4, 'hp=' + ARM.maxHp);
 const PW = makeTank(6, 6, 2, 'power', {});
@@ -366,14 +372,13 @@ assert('J6 power 型敌人提升到 2 血', PW.maxHp === 2, 'hp=' + PW.maxHp);
 /* 渲染冒烟：带武器/血条/状态时不抛异常 */
 startGame(); levelIntro = 0;
 player.gun = 'laser'; player.ammo = 3; player.burnT = 1.2; player.slowT = 2; player.hitFlash = 0.1;
-hpMode = 2; player.hp = 2; player.maxHp = 3;
+player.maxHp = 3; player.hp = 2;   // 手动造出多血血条，覆盖 drawHpPips 渲染路径
 enemies.push(makeTank(6, 6, 2, 'armor', {}));
 items.push({ x:5, y:5, px:110, py:110, type:'flame', t:0 });
 items.push({ x:7, y:5, px:150, py:110, type:'tesla', t:0 });
 grenadeBlasts.push({ px:200, py:200, t:0.8, r:60 });
 let renderOK = true; try { for (let i = 0; i < 30; i++){ update(0.016); render(); } } catch(e){ renderOK = e.message; }
 assert('J7 带武器/血条/状态/手雷警示渲染 30 帧不抛异常', renderOK === true, String(renderOK));
-hpMode = 0;
 
 /* ---------- K. 新机制回归 ---------- */
 /* K1/K2：火力护盾 */
@@ -721,19 +726,19 @@ netMode = rSavedNet; player2 = rSavedP2;
 /* ---------- S. 界面重构：顶部工具栏搬进画面 + 手机横屏 ----------
  * 背景：原先「开始/双人/全图/全屏/音效/闪烁/设置/图鉴/暂停」是一排画布上方的
  * 按钮，手机上离拇指很远、还白白吃掉竖向空间；页脚那一长串操作说明同理。
- * 现在全部收进画面内的菜单与弹窗，并补上手机端真正缺的东西（横屏、血量档位）。 */
+ * 现在全部收进画面内的菜单与弹窗，并补上手机端真正缺的东西（横屏、难度选择）。 */
 
-/* S1 血量档位可程序化切换（此前只有键盘 H，手机用户根本没有入口） */
-const sSavedHp = hpMode;
-setHpMode(PLAYER_HP_MODES.length);          // 正好越界 → 应回绕到 0
-const sHpWrap = hpMode === 0;
-setHpMode(2);
-const sHp2 = hpMode === 2;
-setHpMode(-1);                              // 负数也要安全回绕
-const sHpNeg = hpMode === PLAYER_HP_MODES.length - 1;
-hpMode = sSavedHp;
-assert('S1 血量档位可程序化切换（越界/负数安全回绕）', sHpWrap && sHp2 && sHpNeg,
-       'wrap=' + sHpWrap + ' ->2=' + sHp2 + ' neg=' + sHpNeg);
+/* S1 难度可选（1~5）且越界/负数安全回绕 —— 取代原先只能靠键盘 H 切的「血量档位」 */
+const sSavedDiff = startDiff;
+setDiffStart(TIERS.length + 1);             // 越界 → 回绕到 1
+const sDiffWrap = startDiff === 1;
+setDiffStart(3);
+const sDiff3 = startDiff === 3;
+setDiffStart(-1);                           // 负数也要安全落在 1~5
+const sDiffNeg = startDiff >= 1 && startDiff <= TIERS.length;
+setDiffStart(sSavedDiff);
+assert('S1 难度可程序化选择（越界/负数安全回绕到 1~5）', sDiffWrap && sDiff3 && sDiffNeg,
+       'wrap=' + sDiffWrap + ' ->3=' + sDiff3 + ' neg=' + sDiffNeg);
 
 /* S2 设置 / 图鉴弹窗可开关且互斥（避免两层叠在一起） */
 const sSetOv = document.getElementById('set-overlay');
@@ -785,6 +790,95 @@ state = 'playing'; paused = false; caStateKey = ''; syncCenterActions();
 assert('S5 body.idle：标题/暂停时隐藏摇杆开火键（并显示暂停键），只有真在游玩才相反',
        sTitleIdle && sPlayIdle && sPauseIdle,
        'title=' + sTitleIdle + ' play=' + sPlayIdle + ' pause=' + sPauseIdle);
+
+/* ---------- T. 难度 1~5（每级 5 关、第 5 关 BOSS）+ 过关自动继续 ---------- */
+
+/* T1 难度 ↔ level 区间映射：难度不新增字段，直接由 level 反推 */
+const tMap = [];
+for (const pair of [[1,1],[5,1],[6,2],[10,2],[11,3],[25,5]]){
+  level = pair[0];
+  tMap.push(pair[0] + ':' + curDiff() + '-' + stageInDiff());
+}
+assert('T1 难度由 level 反推：难度 N 覆盖 level (N-1)*5+1 ~ N*5',
+       tMap.join(' ') === '1:1-1 5:1-5 6:2-1 10:2-5 11:3-1 25:5-5', tMap.join(' '));
+
+assert('T2 每级恰好 5 关、共 25 关，且每级第 5 关为 BOSS 关',
+       diffTotalLevels() === 25 && TIERS.length === 5 &&
+       [5,10,15,20,25].every(l => { level = l; return isBossLevel(); }) &&
+       [1,2,3,4,6,11,24].every(l => { level = l; return !isBossLevel(); }),
+       'total=' + diffTotalLevels() + ' tiers=' + TIERS.length);
+
+/* T3 从标题页选定的难度开始 */
+setDiffStart(3);
+startGame();
+const tStart = { lvl: level, diff: curDiff(), tier: tier().name };
+assert('T3 startGame 从选定难度开始（难度 3 → level 11 · 精锐）',
+       tStart.lvl === 11 && tStart.diff === 3 && tStart.tier === '精锐', JSON.stringify(tStart));
+
+/* T4 过关推进 + level 在 1..25 循环 */
+level = 5;  nextLevel();
+const tNext = { lvl: level, diff: curDiff() };
+level = 25; nextLevel();
+const tWrap = { lvl: level, diff: curDiff() };
+assert('T4 过关推进：第 5 关后进入难度 2；难度 5 的第 5 关后回到难度 1',
+       tNext.lvl === 6 && tNext.diff === 2 && tWrap.lvl === 1 && tWrap.diff === 1,
+       'next=' + JSON.stringify(tNext) + ' wrap=' + JSON.stringify(tWrap));
+
+/* T5 过关界面自动继续：进入 clear 带倒计时，倒计时耗尽自动推进 */
+netMode = 'off'; setDiffStart(1); startGame(); levelIntro = 0;
+level = 2;                              // 用普通关，避开「难度通关」分支
+enemyQueue.length = 0; enemies.length = 0;
+for (let i = 0; i < 3; i++) update(0.05);
+const tClear = { state: state, hold: clearHoldT, lvl: level };
+update(CLEAR_HOLD_SEC + 0.2);
+const tAuto = { state: state, lvl: level, hold: clearHoldT };
+assert('T5 过关后进入 clear，倒计时耗尽自动进入下一关',
+       tClear.state === 'clear' && tClear.hold > 0 &&
+       tAuto.state === 'playing' && tAuto.lvl === tClear.lvl + 1 && tAuto.hold === 0,
+       'clear=' + JSON.stringify(tClear) + ' auto=' + JSON.stringify(tAuto));
+
+/* T6 暂停时倒计时冻结（避免暂停中「偷偷过关」） */
+startGame(); levelIntro = 0;
+enemyQueue.length = 0; enemies.length = 0;
+for (let i = 0; i < 3; i++) update(0.05);
+const tHold0 = clearHoldT;
+paused = true;
+update(1.0);
+const tFrozen = (clearHoldT === tHold0);
+paused = false;
+assert('T6 暂停时过关倒计时冻结，不会偷偷推进关卡',
+       state === 'clear' && tHold0 > 0 && tFrozen, 'hold=' + tHold0 + ' -> ' + clearHoldT);
+
+/* T7 联机客方不自行推进关卡（场景切换一律由房主推进、快照跟随） */
+startGame(); levelIntro = 0;
+enemyQueue.length = 0; enemies.length = 0;
+for (let i = 0; i < 3; i++) update(0.05);
+const tGuestLvl = level;
+netMode = 'guest';
+update(CLEAR_HOLD_SEC + 1.0);
+const tGuestStayed = (level === tGuestLvl && state === 'clear');
+netMode = 'off';
+assert('T7 联机客方不自动推进关卡（由房主推进、快照跟随）', tGuestStayed,
+       'lvl=' + level + ' state=' + state);
+
+/* T8 过关文案三种：普通关 / 难度通关 / 全难度通关 */
+const tTexts = (function(){
+  const c = canvas.getContext('2d'); const orig = c.fillText; const rec = [];
+  c.fillText = function(t){ rec.push(String(t)); };
+  level = 4; clearHoldT = 3; drawClear(); const normal = rec.slice();
+  rec.length = 0;
+  level = 5; drawClear(); const boss = rec.slice();
+  rec.length = 0;
+  level = 25; drawClear(); const last = rec.slice();
+  c.fillText = orig;
+  return { normal: normal, boss: boss, last: last };
+})();
+assert('T8 过关文案分三种：普通关 / 难度通关 / 全难度通关',
+       tTexts.normal.some(t => /难度 1 · 第 4 关 完成/.test(t)) &&
+       !tTexts.normal.some(t => /通关/.test(t)) &&
+       tTexts.boss.some(t => /难度 1 通关/.test(t)) &&
+       tTexts.last.some(t => /全部难度通关/.test(t)),
+       JSON.stringify(tTexts).slice(0, 180));
 `;
 
 let err = null;
