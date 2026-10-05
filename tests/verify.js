@@ -944,6 +944,128 @@ const t11 = (function(){
 })();
 assert('T11 预测对账：小偏差保留本地预测（不抖），大偏差才回落到房主权威位置',
        Math.abs(t11.near - 170) < 1 && Math.abs(t11.far - 370) < 1, JSON.stringify(t11));
+/* T12 涡轮加速道具（v1.6.2 新增）：拾取 → 移速 ×1.5 → 同样帧数走得更远 → 计时结束自动失效。
+ * 与「减速」同路：只乘在实际位移上（不动 t.speed），否则会每帧反复相乘而漂移。 */
+netMode = 'off'; paused = false; startGame(); levelIntro = 0; freezePlayer = 0;
+enemies.length = 0; enemyQueue.length = 0; bullets.length = 0; items.length = 0;
+for (let ty = 8; ty <= 14; ty++) for (let tx = 8; tx <= 16; tx++) map[ty][tx] = EMPTY;
+player = makeTank(10, 10, 1, 'player', {invuln:0, power:1});
+const t12Mul0 = statusSpeedMul(player);
+items.push({ x:10, y:10, px:player.px, py:player.py, type:'speed', t:0 });
+collectItems();
+const t12 = { speedT: player.speedT, mul: statusSpeedMul(player), speed: player.speed };
+assert('T12 拾取涡轮 → speedT=20、移速 ×1.5，且不改 t.speed 本身',
+       Math.abs(t12.speedT - SPEED_TIME) < 1e-9 && Math.abs(t12.mul - SPEED_MUL_P) < 1e-9 &&
+       t12Mul0 === 1 && Math.abs(t12.speed - 2.6) < 1e-9, JSON.stringify(t12));
+
+/* T12b 同样 6 帧、同样按键：加速后位移明显更远 */
+function t12Reset(st){
+  player.x = 10; player.y = 10; player.px = 10*TILE + TILE/2; player.py = 10*TILE + TILE/2;
+  player.dir = 1; player.movingTo = null; player.pendingDir = null; player.speedT = st;
+}
+t12Reset(0); keys = { ArrowRight: true };
+for (let i = 0; i < 6; i++) updatePlayer(0.05);
+const t12Slow = player.px;
+t12Reset(SPEED_TIME);
+for (let i = 0; i < 6; i++) updatePlayer(0.05);
+const t12Fast = player.px;
+assert('T12b 加速期间同样帧数位移明显更远（1.5 倍速真的落到移动上）',
+       t12Fast > t12Slow + 5, '慢=' + t12Slow.toFixed(1) + ' 快=' + t12Fast.toFixed(1));
+
+/* T12c 计时结束自动失效 */
+keys = {}; player.speedT = 0.5; player.slowT = 0; tickStatus(player, 0.6);
+assert('T12c 加速计时归零后倍率恢复 1',
+       player.speedT === 0 && statusSpeedMul(player) === 1, 'speedT=' + player.speedT);
+
+/* T12d 敌人侧倍率低于玩家（否则永远追不上、也逃不掉） */
+const t12e = makeTank(6, 6, 2, 'basic', {});
+t12e.speedT = ENEMY_SPEED_TIME;
+assert('T12d 敌人吃加速 → ×1.3 / 12 秒（低于玩家的 ×1.5 / 20 秒）',
+       Math.abs(statusSpeedMul(t12e) - ENEMY_SPEED_MUL) < 1e-9 &&
+       statusSpeedMul(t12e) < SPEED_MUL_P && ENEMY_SPEED_TIME < SPEED_TIME,
+       'mul=' + statusSpeedMul(t12e));
+
+/* T12e 走快照协议：TANK_F 必须登记 speedT，否则联机时客方看不到自己的加速 */
+assert('T12e speedT 已进 TANK_F 且与 tankArr 等长（联机不丢字段）',
+       TANK_F.indexOf('speedT') >= 0 && TANK_F.length === tankArr(player).length &&
+       Math.abs(arrTank(tankArr(player)).speedT - player.speedT) < 1e-9,
+       'TANK_F=' + TANK_F.length + ' arr=' + tankArr(player).length);
+
+/* T13 客方开火本地预测（v1.6.2）：客方开火原本只能等房主快照（一个来回 ≈120ms），
+ * 按下开火有明显空档。现在本地立刻生成曳光弹，房主权威子弹到位即交还。 */
+netMode = 'guest'; coopReady = true; coopDropped = false; paused = false;
+state = 'playing'; freezePlayer = 0; gameTime = 0;
+for (let ty = 8; ty <= 16; ty++) for (let tx = 8; tx <= 20; tx++) map[ty][tx] = EMPTY;
+player2 = makeTank(12, 12, 1, 'player', {invuln:0, power:1});
+player2.bulletCd = 0; player2.overheatT = 0; player2.gun = 'normal'; player2.ammo = 0;
+bullets = []; predBullets.length = 0;
+keys2 = { Space: true };
+predictGuestPlayer2(0.016);
+const t13a = { n: predBullets.length, px: predBullets[0] ? predBullets[0].px : -1 };
+for (let i = 0; i < 4; i++) predictGuestPlayer2(0.016);
+assert('T13 客方按开火 → 立刻在画面上生成曳光弹并向前飞（完全不等房主快照）',
+       t13a.n === 1 && predBullets.length === 1 && predBullets[0].px > t13a.px,
+       'n=' + t13a.n + ' px ' + t13a.px + ' -> ' + (predBullets[0] && predBullets[0].px));
+
+/* T13b 对账：房主权威子弹一到位就把曳光弹交出去（否则同一发会画两遍） */
+const t13pb = predBullets[0];
+bullets = [{ px: t13pb.px + 2, py: t13pb.py, dir: t13pb.dir, ang: t13pb.ang, power: t13pb.power,
+             gun: t13pb.gun, owner: { isPlayer: true, tag: 2 }, dead: false }];
+reconcilePredBullets();
+assert('T13b 房主子弹到位 → 曳光弹交还权威（同一发不会画两遍）',
+       predBullets.length === 0, 'n=' + predBullets.length);
+
+/* T13c 房主一直没放行时不产生「鬼弹」：曳光弹按生命周期自动淡出 */
+predBullets.length = 0; bullets = []; keys2 = { Space: true };
+player2.bulletCd = 0; player2.overheatT = 0;
+predictGuestFire(0.016);
+const t13n1 = predBullets.length;
+for (let i = 0; i < 40; i++) updatePredBullets(0.016);   // 0.64 秒
+assert('T13c 曳光弹有生命周期上限（0.3 秒）：房主未放行也不会留下打不中的「鬼弹」',
+       t13n1 === 1 && predBullets.length === 0, 'n1=' + t13n1 + ' -> ' + predBullets.length);
+
+/* T13d 同屏弹数上限与房主一致（= power），本地曳光弹也计入 */
+predBullets.length = 0; bullets = []; keys2 = { Space: true };
+player2.bulletCd = 0; player2.overheatT = 0; player2.power = 1;
+predictGuestFire(0.016);
+player2.bulletCd = 0;
+predictGuestFire(0.016);          // 第 2 发应被「同屏弹数 = power」挡住
+assert('T13d 本地预测同样遵守「同屏弹数 = 火力等级」', predBullets.length === 1, 'n=' + predBullets.length);
+
+/* T13e 客方开火本地音效 —— 补掉老问题：sfx.shoot() 只在 fireBullet()（仅房主执行）里调用，
+ * 客方此前全程听不到自己的开火声。这里直接盯 predictGuestFire 是否请求了开火音效
+ * （换成盯 sfxRaw 会撞上节流：gameTime 在 T13 里被重置过，节流记录来自更早的用例）。 */
+let t13Sfx = 0;
+const t13OrigShoot = sfx.shoot;
+sfx.shoot = function(){ t13Sfx++; };
+predBullets.length = 0; bullets = []; keys2 = { Space: true }; player2.bulletCd = 0;
+predictGuestFire(0.016);
+sfx.shoot = t13OrigShoot;
+assert('T13e 客方开火在本地播放音效（此前客方全程无声）', t13Sfx === 1, 'n=' + t13Sfx);
+
+/* T13f 子弹快照带拥有者标签：客方要认出哪几发是自己的（2=P2 / 1=P1 / 0=敌） */
+const t13TagP2 = bulletArr({ px:0, py:0, dir:0, ang:0, power:1, gun:'normal', owner: player2, kind:null });
+const t13TagP1 = bulletArr({ px:0, py:0, dir:0, ang:0, power:1, gun:'normal', owner: player,  kind:null });
+const t13TagEn = bulletArr({ px:0, py:0, dir:0, ang:0, power:1, gun:'normal', owner: makeTank(3,3,2,'basic',{}), kind:null });
+assert('T13f 子弹快照带拥有者标签（2=P2 / 1=P1 / 0=敌），客方才能认出自己的弹幕',
+       t13TagP2[10] === 2 && t13TagP1[10] === 1 && t13TagEn[10] === 0 &&
+       arrBullet(t13TagP2).owner.tag === 2,
+       'p2=' + t13TagP2[10] + ' p1=' + t13TagP1[10] + ' en=' + t13TagEn[10]);
+
+/* T13g 暂停 / 非对局 / 掉线时立即收掉曳光弹（不留残影） */
+predBullets.length = 0; keys2 = { Space: true }; player2.bulletCd = 0;
+predictGuestFire(0.016);
+const t13res = predBullets.length;
+paused = true;  predictGuestPlayer2(0.016); const t13P = predBullets.length;
+paused = false; state = 'clear'; predictGuestPlayer2(0.016); const t13S = predBullets.length;
+state = 'playing'; keys2 = { Space: true }; player2.bulletCd = 0;
+predictGuestFire(0.016); const t13Pre = predBullets.length;
+coopDropped = true; predictGuestPlayer2(0.016); const t13D = predBullets.length;
+coopDropped = false;
+assert('T13g 暂停 / 非对局 / 掉线时立即收掉曳光弹（不留残影）',
+       t13res === 1 && t13P === 0 && t13S === 0 && t13Pre === 1 && t13D === 0,
+       JSON.stringify({ res: t13res, paused: t13P, clear: t13S, dropped: t13D }));
+
 netMode = 'off'; keys2 = {}; keys = {};
 `;
 

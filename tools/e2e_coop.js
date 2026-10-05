@@ -57,6 +57,8 @@ GET = function(){ return {
   p2: player2 ? { px: player2.px, py: player2.py, x: player2.x, y: player2.y,
                   gun: player2.gun, ammo: player2.ammo, power: player2.power } : null,
   keys2: JSON.parse(JSON.stringify(keys2)),
+  p2bullets: bullets.filter(function(b){ return b.owner === player2 || (b.owner && b.owner.tag === 2); }).length,
+  pred: predBullets.length,
 }; };
 SANDBOX_OUT = [];
 `;
@@ -277,6 +279,30 @@ function waitMsg(sb, pred, timeout = 2000){
     A('E14 无输入时本地预测不产生位移（松手收敛到格心后即静止）',
       q1.px === q2.px && q1.py === q2.py,
       '(' + q1.px + ',' + q1.py + ') -> (' + q2.px + ',' + q2.py + ')');
+
+    /* 9. 客方开火本地预测（v1.6.2）：按下开火 → 客方画面立刻出现曳光弹（不等快照），
+     * 同时经房主权威真的发射出子弹 —— 联机开火必须真的生效，不能只是本地特效。 */
+    guest.setKeys2({ Space: true });
+    for (let i = 0; i < 4; i++) guest.tick(16.7);   // 越过本地冷却（≤0.05s）后才允许首发
+    const gShot = guest.get();
+    A('E15 客方按开火 → 画面上立刻出现本地曳光弹（不必等房主快照）',
+      gShot.pred >= 1, 'pred=' + gShot.pred);
+
+    let maxP2 = 0;
+    for (let i = 0; i < 45; i++){
+      host.tick(16.7); guest.tick(16.7);
+      host.flush(hWS); guest.flush(gWS);
+      await sleep(6);
+      host.feed(); guest.feed();
+      maxP2 = Math.max(maxP2, host.get().p2bullets);
+    }
+    A('E16 客方开火经房主权威真的发射出子弹（不是只有本地特效）',
+      maxP2 >= 1, '房主侧 P2 子弹峰值=' + maxP2);
+
+    guest.setKeys2({});
+    await run(20);
+    A('E17 客方松手后曳光弹归零（本地预测不会自己持续开火 / 不留残影）',
+      guest.get().pred === 0, 'pred=' + guest.get().pred);
 
   } catch (e) {
     A('端到端执行无异常', false, (e && e.message) || String(e));

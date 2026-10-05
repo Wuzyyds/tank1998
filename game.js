@@ -24,11 +24,20 @@ const AMPHIBIOUS_TIME = 60;  // 水陆两栖 60 秒
 const SHIELD_TIME     = 12;
 const FREEZE_TIME     = 10;
 const EAGLE_TIME      = 60;  // 老鹰：无敌 60 秒（重复拾取重置计时器，不叠加）
+/* ---- 涡轮加速（v1.6.2 新增道具）：给「走得快」补一个正反馈 ----
+ * 玩家基础 2.6 格/秒 × 1.5 = 3.9 格/秒 —— 快过最快的「快速兵」（3.4）；
+ * 走一格从 385ms 缩到 256ms，切进口 / 绕后 / 抢道具的差别一眼能看出来。
+ * 与「减速」同路：只乘在 statusSpeedMul 上（作用于实际位移），不动 t.speed，
+ * 否则会像减速那样每帧反复相乘而漂移。 */
+const SPEED_TIME      = 20;
+const SPEED_MUL_P     = 1.50;
 
 /* ---- 敌人侧平衡（避免敌军拾取道具后关卡崩坏） ---- */
 const ENEMY_SHIELD_TIME   = 6;    // 敌人吃护盾：6 秒（玩家 12 秒）
 const ENEMY_FREEZE_TIME   = 4;    // 敌人吃时钟：冻玩家 4 秒（玩家冻敌 10 秒）
 const ENEMY_AMPHIBIOUS_TIME = 20; // 敌人吃两栖：20 秒
+const ENEMY_SPEED_TIME    = 12;   // 敌人吃加速：12 秒（玩家 20 秒）
+const ENEMY_SPEED_MUL     = 1.30; // 敌人加速倍率（低于玩家：否则永远追不上、也逃不掉）
 const ENEMY_MAX_POWER     = 2;    // 敌人火力封顶 2 级（3 级会蒸干水塘，拆掉地图结构）
 const ENEMY_ITEM_GREED    = 0.35; // hunter 型敌人主动抢道具的概率（0 = 只在路过时吃到）
 
@@ -112,8 +121,8 @@ function setDiffStart(d){
 }
 const ELITE_TYPES = ['armor', 'power'];
 const ELITE_COUNT = 3;
-const ITEM_TYPES = ['star','grenade','shield','clock','tank','amphibious','eagle'];
-const ITEM_WEIGHT = [26, 12, 18, 14, 10, 20, 8];
+const ITEM_TYPES = ['star','grenade','shield','clock','tank','amphibious','eagle','speed'];
+const ITEM_WEIGHT = [26, 12, 18, 14, 10, 20, 8, 14];   // 两表必须等长（rollItemType 按下标加权）
 const GUN_NAMES = ['普通弹', '穿甲弹', '毁灭弹'];
 const GUN_COLORS = ['#FFD23F', '#FF8A00', '#FF3B30'];
 
@@ -861,6 +870,10 @@ let state = 'title';        // title | playing | clear | over
 let level = 1, score = 0, hiScore = 0, lives = 2;
 let nextExtraLifeScore = 2000;   // 每 2000 分奖一命
 let player = null, enemies = [], bullets = [], items = [], explosions = [];
+/* 客方本地曳光弹（纯画面，权威仍在房主）。与 bullets 分开存放：
+ * 它不参与碰撞、不进快照、不产生任何权威状态，只是把「按下开火」到「房主的子弹
+ * 经一个来回送回来」之间的空档填上。 */
+let predBullets = [];
 let enemyQueue = [], spawnTimer = 0, killCount = 0;
 let freezeEnemies = 0, freezePlayer = 0, baseAlive = true, overReason = '';
 let playerEagle = 0;        // 老鹰无敌剩余时间（秒）
@@ -942,7 +955,7 @@ function makeTank(x, y, dir, kind, opts){
     invuln: opts.invuln || 0, dead: false, deadTimer: 0,
     score: def.score || 0, isPlayer: isP,
     power: opts.power || 1, bulletCd: 0,
-    amphibious: 0,
+    amphibious: 0, speedT: 0,
     /* ---- 武器与状态（状态挂 tank，新关卡重建即清零） ---- */
     gun: 'normal', ammo: 0,
     burnT: 0, burnAcc: 0, burnGen: 0,
@@ -1608,6 +1621,7 @@ function spreadBurn(src){
 function statusSpeedMul(t){
   let m = 1;
   if (t.slowT > 0) m *= (t.isPlayer ? SLOW_MUL_P : SLOW_MUL_E);
+  if (t.speedT > 0) m *= (t.isPlayer ? SPEED_MUL_P : ENEMY_SPEED_MUL);   // 涡轮加速
   return Math.max(0.2, m);
 }
 function tickStatus(t, dt){
@@ -1616,6 +1630,7 @@ function tickStatus(t, dt){
   if (t.amphibious > 0) t.amphibious -= dt;
   if (t.slowT > 0) t.slowT = Math.max(0, t.slowT - dt);
   if (t.overheatT > 0) t.overheatT = Math.max(0, t.overheatT - dt);
+  if (t.speedT > 0) t.speedT = Math.max(0, t.speedT - dt);   // 涡轮加速计时
   if (t.hitFlash > 0) t.hitFlash = Math.max(0, t.hitFlash - dt);
   if (t.burnT > 0){
     // 冻结 / 无敌期间 DOT 暂停：规则统一，避免控制道具互相抵消、护盾被 DOT 无视
@@ -1798,6 +1813,13 @@ function pickUpItem(it, tank){
     case 'amphibious':
       tank.amphibious = isP ? AMPHIBIOUS_TIME : ENEMY_AMPHIBIOUS_TIME;
       sfx.shield();
+      break;
+    case 'speed':
+      /* 涡轮加速：重复拾取刷满时长（不叠加）；与减速同时存在时两者相乘、互相抵消一部分 */
+      tank.speedT = Math.max(tank.speedT, isP ? SPEED_TIME : ENEMY_SPEED_TIME);
+      sfx.itemPickup();
+      hint(isP ? (whoTag(tank) + '涡轮加速！移速 ×' + SPEED_MUL_P.toFixed(1) + ' · ' + SPEED_TIME + '秒')
+               : '敌军加速！');
       break;
     case 'eagle':
       /* 老鹰：立即进入 60 秒无敌。
@@ -2348,6 +2370,13 @@ function drawTank(t){
     px(cx - 2, cy - 25, 4, 3, flashOn(10) ? '#FFD23F' : '#FF6A00');
   }
   if (t.slowT > 0) px(cx - 2, cy - 25, 4, 3, '#BFE9FF');
+  /* 加速标记：状态带（cy-25）右侧的绿色「»」双箭头，与火力点带（cy-30~cy-26）不重叠 */
+  if (t.speedT > 0){
+    px(cx + 4, cy - 26, 3, 2, '#5BE37A');
+    px(cx + 7, cy - 26, 3, 2, '#5BE37A');
+    px(cx + 5, cy - 23, 3, 2, '#5BE37A');
+    px(cx + 8, cy - 23, 3, 2, '#5BE37A');
+  }
   // 火力等级标注（敌我皆可见）
   if (t.power >= 2){
     for (let i = 0; i < t.power; i++) px(cx - 7 + i*5, cy - 30, 4, 4, GUN_COLORS[i] || '#FFD23F');
@@ -2391,7 +2420,7 @@ function drawItem(it){
   const x = it.x*TILE, y = it.y*TILE, cx = x+10, cy = y+10;
   const ring = { star:'#F0C040', grenade:'#FF8A6B', shield:'#3FB7FF',
                  clock:'#E8EBEF', tank:'#FFD23F', amphibious:'#7FD0FF',
-                 eagle:'#FFC300' }[it.type] || WEAPON_RING[it.type] || '#F0C040';
+                 eagle:'#FFC300', speed:'#5BE37A' }[it.type] || WEAPON_RING[it.type] || '#F0C040';
   // 呼吸外圈（减少动效时静止）
   const pulse = reduceMotion ? 0.5 : 0.5 + 0.5*Math.sin(gameTime*5);
   ctx.fillStyle = ring;
@@ -2466,6 +2495,14 @@ function drawItem(it){
       px(cx-9, cy-2, 18, 4, '#3FB7FF');
       px(cx-7, cy, 14, 2, '#FFFFFF');
       px(cx-7, cy+3, 14, 2, '#FFFFFF');
+      break;
+    case 'speed':
+      /* 闪电：一眼「加速」，形状与其余道具完全不重样 */
+      ctx.fillStyle = '#5BE37A';
+      ctx.beginPath();
+      ctx.moveTo(cx + 3, cy - 8); ctx.lineTo(cx - 5, cy + 1); ctx.lineTo(cx - 1, cy + 1);
+      ctx.lineTo(cx - 3, cy + 8); ctx.lineTo(cx + 5, cy - 2); ctx.lineTo(cx + 1, cy - 2);
+      ctx.closePath(); ctx.fill();
       break;
     case 'eagle':
       drawEagleItem(x, y);
@@ -2568,6 +2605,19 @@ function drawExplosion(ex){
   ctx.globalAlpha = 1;
 }
 
+/* 子弹批绘：房主权威子弹与客方本地曳光弹共用。 */
+function drawBulletList(list){
+  for (const b of list){
+    const p = b.power || 1;
+    const sp = bulletSprite(b.gun, p);
+    const ang = (b.ang == null ? angFor(b.dir) : b.ang) + Math.PI / 2;
+    const co = Math.cos(ang), si = Math.sin(ang);
+    ctx.setTransform(DPR*co, DPR*si, -DPR*si, DPR*co, DPR*b.px, DPR*b.py);
+    if (sp) ctx.drawImage(sp, -BULLET_SPR_W/2, -BULLET_SPR_H/2, BULLET_SPR_W, BULLET_SPR_H);
+    else paintBullet((GUNS[b.gun] || GUNS.normal).color, p, 0, 0);   // 回退：无 canvas 环境（变换已就位）
+  }
+}
+
 function render(){
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // 高分屏：统一缩放坐标系
   /* 背景黑底已并入地形缓存（见 flushTerrain）：这里只提交一次全屏 drawImage。
@@ -2582,18 +2632,11 @@ function render(){
   if (player) drawTank(player);
   if (player2) drawTank(player2);
   for (const e of enemies) drawTank(e);
-  /* 子弹：把「旋转矩阵」直接并入 setTransform，省掉每发的 save/translate/rotate/restore；
-   * 弹体形状走预烘焙精灵（见 bulletSprite）。约 10 次绘制指令 → 2 次。 */
-  for (const b of bullets){
-    const p = b.power || 1;
-    const sp = bulletSprite(b.gun, p);
-    const ang = (b.ang == null ? angFor(b.dir) : b.ang) + Math.PI / 2;
-    const co = Math.cos(ang), si = Math.sin(ang);
-    ctx.setTransform(DPR*co, DPR*si, -DPR*si, DPR*co, DPR*b.px, DPR*b.py);
-    if (sp) ctx.drawImage(sp, -BULLET_SPR_W/2, -BULLET_SPR_H/2, BULLET_SPR_W, BULLET_SPR_H);
-    else paintBullet((GUNS[b.gun] || GUNS.normal).color, p, 0, 0);   // 回退：无 canvas 环境（变换已就位）
-  }
-  if (bullets.length) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // 复位（后续绘制依赖基础变换）
+  /* 子弹：改由 drawBulletList 批绘（见其定义）—— 客方的本地曳光弹走同一个函数，
+   * 同一发子弹在两边屏幕上的观感完全一致，交还权威时才看不出接缝。 */
+  drawBulletList(bullets);
+  drawBulletList(predBullets);
+  if (bullets.length || predBullets.length) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // 复位（后续绘制依赖基础变换）
   drawGrenadeWarn();
   for (const ex of explosions) drawExplosion(ex);
   for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++){
@@ -2778,7 +2821,7 @@ function drawPanel(){
   ctx.beginPath(); ctx.moveTo(x0+10, 446); ctx.lineTo(x0+PANEL_W-10, 446); ctx.stroke();
   ctx.fillStyle = '#98A2AD'; ctx.font = '11px sans-serif';
   ctx.fillText('↑↓←→/WASD · 空格射击', x0+14, 464);
-  ctx.fillText('P 暂停  M 静音  H 血量', x0+14, 480);
+  ctx.fillText('P 暂停  M 静音  H 难度', x0+14, 480);
 
   /* 状态区：双列紧凑，3 行容纳 6 个状态，避免溢出画布。
    * 状态挂在各自坦克上（不共享），双人时加 P1/P2 前缀并各自成条，避免被误读成共享。 */
@@ -2800,6 +2843,8 @@ function drawPanel(){
   if (p2Alive && player2.burnT > 0) st(qT + '燃烧 ' + player2.burnT.toFixed(1), '#FF6A00');
   if (player && player.slowT > 0) st(pT + '减速 ' + player.slowT.toFixed(1), '#BFE9FF');
   if (p2Alive && player2.slowT > 0) st(qT + '减速 ' + player2.slowT.toFixed(1), '#BFE9FF');
+  if (player && player.speedT > 0) st(pT + '加速 ' + player.speedT.toFixed(1), '#5BE37A');
+  if (p2Alive && player2.speedT > 0) st(qT + '加速 ' + player2.speedT.toFixed(1), '#5BE37A');
   if (player && player.overheatT > 0) st(pT + '过热 ' + player.overheatT.toFixed(1), '#FF8A00');
   if (p2Alive && player2.overheatT > 0) st(qT + '过热 ' + player2.overheatT.toFixed(1), '#FF8A00');
   /* 音频被浏览器挂起时的可见提示（点一下屏幕即可恢复） */
@@ -2999,7 +3044,7 @@ function drawCurtain(){
  * 收发两侧必须同步修改，数组下标即协议。 */
 const TANK_F = ['id','x','y','px','py','dir','kind','hp','maxHp','fire','speed','power',
                 'invuln','dead','deadTimer','score','isPlayer','ammo','gun','role',
-                'pendingDir','movingTo','movingToY','amphibious','burnT','slowT','overheatT','hitFlash','bulletCd'];
+                'pendingDir','movingTo','movingToY','amphibious','speedT','burnT','slowT','overheatT','hitFlash','bulletCd'];
 function tankArr(t){                       // 下标见 TANK_F
   if (!t) return null;
   return [
@@ -3007,7 +3052,7 @@ function tankArr(t){                       // 下标见 TANK_F
     t.invuln, t.dead ? 1 : 0, t.deadTimer, t.score, t.isPlayer ? 1 : 0, t.ammo, t.gun, t.role,
     t.pendingDir === undefined ? -2 : t.pendingDir,
     t.movingTo ? t.movingTo.x : -1, t.movingTo ? t.movingTo.y : -1,
-    t.amphibious, t.burnT, t.slowT, t.overheatT, t.hitFlash, t.bulletCd,
+    t.amphibious, t.speedT || 0, t.burnT, t.slowT, t.overheatT, t.hitFlash, t.bulletCd,
   ];
 }
 function arrTank(a){
@@ -3020,13 +3065,20 @@ function arrTank(a){
   delete t.movingToY;
   return t;
 }
+/* 末位是「拥有者标签」：0 = 敌人 / 1 = 玩家1 / 2 = 玩家2。
+ * 原先只发一个 isPlayer 布尔，客方根本分不清哪几发弹幕是自己的、哪几发是队友的 ——
+ * 而「客方开火本地预测」正需要它：本地冷却要按自己的弹数封顶，曳光弹要按拥有者+位置
+ * 与房主的权威子弹对账。解析侧对老格式（缺第 11 位）留了回退。 */
 function bulletArr(b){
+  const own = b.owner;
+  const tag = !own ? 0 : (own.isPlayer ? (own === player2 ? 2 : 1) : 0);
   return [b.px, b.py, b.x, b.y, b.dir, b.ang, b.power || 1, b.gun || 'normal',
-          (b.owner && b.owner.isPlayer) ? 1 : 0, b.kind];
+          (own && own.isPlayer) ? 1 : 0, b.kind, tag];
 }
 function arrBullet(a){
+  const tag = (a[10] === undefined) ? (a[8] === 1 ? 1 : 0) : a[10];
   return { px:a[0], py:a[1], x:a[2], y:a[3], dir:a[4], ang:a[5], power:a[6], gun:a[7],
-           owner:{ isPlayer: a[8] === 1 }, kind:a[9] };
+           owner:{ isPlayer: tag !== 0, tag: tag }, kind:a[9] };
 }
 /* 地图增量：setTile 写入，由 serializeSnapshot 取走；超过阈值就退回全量 */
 let snapSeq = 0, coopRtt = 0, lastSnapT = 0;
@@ -3099,6 +3151,7 @@ function applySnapshot(s){
   player2 = np2;
   enemies = s.e.map(arrTank);
   bullets = s.b.map(arrBullet);
+  reconcilePredBullets();      // 房主权威子弹已到位 → 交还，避免同一发画两遍
   items = s.it.map(i => ({ x:i[0], y:i[1], px:i[2], py:i[3], type:i[4], t:i[5], dead:false }));
   explosions = s.ex.map(x => ({ px:x[0], py:x[1], t:x[2], dur:x[3], kind:x[4] }));
   grenadeBlasts = (s.gb || []).map(g => ({ px:g[0], py:g[1], t:g[2], r:g[3] }));
@@ -3133,12 +3186,109 @@ function unpackInput(b){
  * 两边跑同一份确定性代码、又都会吸附到格心，所以正常情况偏差只有几个像素；
  * 真正分歧（死亡 / 重生 / 换关 / 被别的坦克卡住）时误差会立刻超标，自然回落到权威值。 */
 const PRED_TOL = 12;            // 像素：超过就认定与房主分歧，直接采纳权威位置
-function predictGuestPlayer2(dt){
-  if (netMode !== 'guest' || !coopReady || coopDropped) return;
-  if (state !== 'playing' || paused || freezePlayer > 0) return;
+
+/* ---- 客方开火本地预测（v1.6.2）----
+ * 开火的「权威」同样在房主那侧：客方的开火要先经 上行 → 房主一帧 → 下行，屏幕上才
+ * 出现子弹，公网实测单向中继 ≈62ms，也就是按下开火后有 120ms 量级的空档，手感上是
+ * 「按了没反应」。这里给客方补一段**纯画面**的曳光弹（predBullets）：
+ *   · 触发条件与房主的 updatePlayer2 完全一致（射击键 + 未过热 + 本地冷却 + 同屏弹数上限）；
+ *   · 只推进位置，**不参与任何碰撞** —— 不打敌人、不拆墙、不加分，权威仍是房主；
+ *   · 快照到达时按「拥有者 + 武器 + 位置」与房主新发出的那发对账：重合就交还权威
+ *     （两边位置只差几像素，交接看不出缝）；对不上就最多活 0.3 秒淡出
+ *     （≈ 一发普通弹的存活时间，所以「房主没放行」时不会留下打不中的鬼弹）；
+ *   · 本地同时播开火音效 —— 顺带补掉一个老问题：客方此前**全程没有开火音效**，
+ *     因为 sfx.shoot() 只在 fireBullet() 里调用，而 fireBullet 只有房主会执行。
+ * 暂停 / 冻结 / 非对局 / 掉线时立即清空，不留残影。 */
+const PRED_BULLET_LIFE  = 0.30;   // 曳光弹最长存活（秒）
+const PRED_BULLET_MATCH = 34;     // 与房主权威子弹的对账容差（像素）
+
+function clearPredBullets(){ if (predBullets.length) predBullets.length = 0; }
+/* 房主权威弹里属于玩家2 的发数（靠快照的拥有者标签认出来） */
+function guestP2BulletCount(){
+  let n = 0;
+  for (const b of bullets) if (b.owner && b.owner.tag === 2) n++;
+  return n;
+}
+function spawnPredBullets(t){
+  const d = DIRS[t.dir];
+  const power = t.power || 1;
+  const spd = bulletSpeed(t, power);
+  const gun = (t.gun && t.gun !== 'normal' && t.ammo > 0) ? t.gun : 'normal';
+  const ug = GUNS[gun] || GUNS.normal;
+  const mk = ang => ({
+    px: t.px + d.dx*16, py: t.py + d.dy*16, dir: t.dir, ang: ang,
+    speed: spd * (ug.speedK || 1), power: power, gun: gun,
+    owner: { isPlayer: true, tag: 2 }, kind: null,
+    dead: false, predT: PRED_BULLET_LIFE,
+  });
+  if (ug.spread){
+    for (let i = 0; i < ug.spread; i++){
+      const off = (i - (ug.spread - 1) / 2) * (22 * Math.PI / 180);
+      predBullets.push(mk(angFor(t.dir) + off));
+    }
+  } else {
+    predBullets.push(mk(angFor(t.dir)));
+  }
+}
+function predictGuestFire(dt){
   const t = player2;
   if (!t || t.dead) return;
+  if (!(keys2.Space || keys2.KeyJ) || t.overheatT > 0){
+    if (t.bulletCd > 0.05) t.bulletCd = 0.05;   // 与房主一致：松手后冷却迅速归位
+    return;
+  }
+  t.bulletCd -= dt;
+  if (t.bulletCd > 0) return;
+  /* 同屏弹数上限与房主一致（= power）：房主权威弹 + 本地曳光弹一起数，
+   * 否则本地会连打两发、房主只放行一发。 */
+  if (guestP2BulletCount() + predBullets.length >= (t.power || 1)) return;
+  t.bulletCd = t.fire;
+  spawnPredBullets(t);
+  sfx.shoot();
+}
+/* 曳光弹推进 + 生命周期到点淡出（无分配，原地压缩） */
+function updatePredBullets(dt){
+  if (!predBullets.length) return;
+  let w = 0;
+  for (let i = 0; i < predBullets.length; i++){
+    const b = predBullets[i];
+    b.predT -= dt;
+    if (b.predT <= 0) continue;
+    const dist = b.speed * dt;
+    b.px += Math.cos(b.ang) * dist;
+    b.py += Math.sin(b.ang) * dist;
+    if (b.px < 0 || b.px >= PLAY_W || b.py < 0 || b.py >= PLAY_H) continue;
+    predBullets[w++] = b;
+  }
+  predBullets.length = w;
+}
+/* 对账：房主的权威子弹一到位就把对应的曳光弹交出去，避免「同一发画两遍」 */
+function reconcilePredBullets(){
+  if (!predBullets.length) return;
+  let w = 0;
+  for (let i = 0; i < predBullets.length; i++){
+    const p = predBullets[i];
+    let matched = false;
+    for (const b of bullets){
+      if (b.dead) continue;
+      if (!b.owner || b.owner.tag !== 2) continue;
+      if (b.gun !== p.gun || (b.power || 1) !== p.power) continue;
+      const dx = b.px - p.px, dy = b.py - p.py;
+      if (dx*dx + dy*dy <= PRED_BULLET_MATCH*PRED_BULLET_MATCH){ matched = true; break; }
+    }
+    if (!matched) predBullets[w++] = p;
+  }
+  predBullets.length = w;
+}
+
+function predictGuestPlayer2(dt){
+  if (netMode !== 'guest' || !coopReady || coopDropped){ clearPredBullets(); return; }
+  if (state !== 'playing' || paused || freezePlayer > 0){ clearPredBullets(); return; }
+  const t = player2;
+  if (!t || t.dead){ clearPredBullets(); return; }
   drivePlayerTank(t, keys2, dt);
+  predictGuestFire(dt);
+  updatePredBullets(dt);
 }
 
 /* ================= 双人合作：连接与 UI ================= */
@@ -3644,6 +3794,7 @@ function setPaused(v, sync){
   v = !!v;
   const changed = (paused !== v);
   paused = v;
+  if (paused) clearPredBullets();   // 暂停后世界静止，曳光弹否则会冻在画面上成残影
   if (ctlPause){
     ctlPause.textContent = paused ? '▶' : '⏸';
     ctlPause.classList.toggle('on', paused);

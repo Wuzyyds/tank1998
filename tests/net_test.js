@@ -353,6 +353,43 @@ function staticChecks() {
     gjSrc.indexOf('const PRED_TOL = ') >= 0;
   assert('客方本地预测已接入（画面立刻响应），且带容差对账（防跑飞 / 防抖动）', predOk,
     predOk ? '' : '未找到 predictGuestPlayer2 的定义或调用');
+
+  /* ---- v1.6.2：客方开火本地预测 / 涡轮加速 的防回退锁 ---- */
+  const firePredOk =
+    gjSrc.indexOf('function predictGuestFire(dt){') >= 0 &&
+    gjSrc.indexOf('  predictGuestFire(dt);') >= 0 &&
+    gjSrc.indexOf('function reconcilePredBullets(){') >= 0 &&
+    gjSrc.indexOf('  reconcilePredBullets();') >= 0 &&
+    gjSrc.indexOf('const PRED_BULLET_LIFE') >= 0 &&
+    gjSrc.indexOf('const PRED_BULLET_MATCH') >= 0;
+  assert('客方开火本地预测已接入（曳光弹 + 权威对账 + 生命周期上限）', firePredOk,
+    firePredOk ? '' : '未走 predictGuestFire / reconcilePredBullets');
+
+  const guestShootSfx = /function predictGuestFire\(dt\)\{[\s\S]*?sfx\.shoot\(\);/.test(gjSrc);
+  assert('客方开火在本地播放音效（此前 sfx.shoot 只在房主侧的 fireBullet 里调用 → 客方全程无声）',
+    guestShootSfx, guestShootSfx ? '' : 'predictGuestFire 里没有 sfx.shoot()');
+
+  const ownerTagOk =
+    gjSrc.indexOf('own === player2 ? 2 : 1') >= 0 &&
+    gjSrc.indexOf('owner:{ isPlayer: tag !== 0, tag: tag }') >= 0;
+  assert('子弹快照带拥有者标签（0 敌 / 1 P1 / 2 P2）—— 客方靠它认出自己的弹幕',
+    ownerTagOk, ownerTagOk ? '' : 'bulletArr 未写拥有者标签');
+
+  const typesM = /const ITEM_TYPES = \[([^\]]*)\]/.exec(gjSrc);
+  const weightM = /const ITEM_WEIGHT = \[([^\]]*)\]/.exec(gjSrc);
+  const nTypes = typesM ? typesM[1].split(',').length : 0;
+  const nWeight = weightM ? weightM[1].split(',').length : 0;
+  assert('道具类型表与权重表等长，且含新增的 speed（不等长会加权取到 undefined）',
+    nTypes === nWeight && nTypes >= 8 && !!typesM && typesM[1].indexOf("'speed'") >= 0,
+    'types=' + nTypes + ' weights=' + nWeight);
+
+  assert('涡轮加速道具：类型 / 权重 / 拾取分支 / 移速倍率 四处齐备',
+    gjSrc.indexOf("case 'speed':") >= 0 &&
+    gjSrc.indexOf('const SPEED_TIME') >= 0 &&
+    gjSrc.indexOf('const SPEED_MUL_P') >= 0 &&
+    gjSrc.indexOf('if (t.speedT > 0) m *= (t.isPlayer ? SPEED_MUL_P : ENEMY_SPEED_MUL);') >= 0 &&
+    gjSrc.indexOf("'amphibious','speedT','burnT'") >= 0,
+    '缺少涡轮加速的某处实现');
 }
 
 /* ---------- CLI 配置校验 ----------
@@ -600,6 +637,13 @@ function unit() {
   const bd = vm.runInContext("(function(){ level = 5; items = []; var b = makeTank(3,3,0,'boss',{}); b.hp = 1; damageTank(b, 1, 'test'); return { dead: b.dead, dropped: items.length, score: b.score }; })()", context);
   assert('首领阵亡：掉落 2 个道具（force 越过同屏 3 上限），得分 2000', bd.dead === true && bd.dropped === 2 && bd.score === 2000, JSON.stringify(bd));
 
+  // 涡轮加速道具：拾取生效（×1.5 / 20 秒）且 speedT 走快照协议（联机时客方才能看到自己的加速）
+  const spdUp = vm.runInContext("(function(){ netMode='off'; player2=null; startGame(); levelIntro=0; items=[]; player.speedT=0; items.push({x:player.x,y:player.y,px:player.px,py:player.py,type:'speed',t:0,dead:false}); collectItems(); return { st: player.speedT, mul: statusSpeedMul(player), idx: TANK_F.indexOf('speedT'), back: arrTank(tankArr(player)).speedT, len: TANK_F.length, arr: tankArr(player).length }; })()", context);
+  assert('涡轮加速：拾取后移速 ×1.5 / 20 秒，且 speedT 走快照协议（TANK_F 与 tankArr 等长）',
+    Math.abs(spdUp.st - 20) < 1e-9 && Math.abs(spdUp.mul - 1.5) < 1e-9 &&
+    spdUp.idx >= 0 && Math.abs(spdUp.back - 20) < 1e-9 && spdUp.len === spdUp.arr,
+    JSON.stringify(spdUp));
+
   // 音量总线 / BGM：无 AudioContext 时必须全部是安全空操作（Node 测试环境）
   const av = vm.runInContext("(function(){ var o = {}; o.actx = !!actx; o.bus = masterGain; setVolume('master', 2); o.clampHi = VOL.master; setVolume('master', -1); o.clampLo = VOL.master; setVolume('sfx', 0.25); o.sfx = VOL.sfx; setVolume('bogus', 0.5); o.ignored = (VOL.bogus === undefined); syncBgm(); o.bgmName = bgmName; setBgmOn(false); o.off = bgmOn; setBgmOn(true); o.on = bgmOn; applyVolumes(); o.ok = true; return o; })()", context);
   assert('音量总线：无 AudioContext 时不报错且总线未创建', av.actx === false && av.bus === null && av.ok === true, JSON.stringify(av));
@@ -639,7 +683,7 @@ function unit() {
   assert('延迟测量：发送时刻环形缓冲有上限（16 帧 ≈ 0.8 秒窗口）', rtt.keep === 16, JSON.stringify(rtt));
 
   // 高关卡冒烟：BOSS 关 / 精英关连续跑帧（含地形缓存、字母道具、BOSS 血条、幕布标签）
-  const smoke = vm.runInContext("(function(){ var err = null, out = {}; try { netMode = 'off'; player2 = null; startGame(); level = 5; startLevel(); enemies = [makeTank(6, 3, 2, 'boss', {invuln:0})]; enemies[0].hp = 7; enemyQueue = ['armor','power','bonus']; items = [{x:5,y:5,px:110,py:110,type:'laser',t:0,dead:false}]; for (var i = 0; i < 220; i++){ gameTime += 0.016; update(0.016); render(); syncBgm(); } out.bossTag = levelTag(); out.theme5 = levelThemeName; level = 4; startLevel(); for (var j = 0; j < 120; j++){ gameTime += 0.016; update(0.016); render(); } out.eliteTag = levelTag(); out.theme4 = levelThemeName; out.enemyCount = enemyQueue.length; } catch(e){ err = e.message + ' @ ' + (e.stack || '').split('\\n')[1]; } return { err: err, out: out }; })()", context);
+  const smoke = vm.runInContext("(function(){ var err = null, out = {}; try { netMode = 'off'; player2 = null; startGame(); level = 5; startLevel(); enemies = [makeTank(6, 3, 2, 'boss', {invuln:0})]; enemies[0].hp = 7; enemyQueue = ['armor','power','bonus']; items = [{x:5,y:5,px:110,py:110,type:'laser',t:0,dead:false},{x:7,y:5,px:150,py:110,type:'speed',t:0,dead:false}]; for (var i = 0; i < 220; i++){ gameTime += 0.016; update(0.016); render(); syncBgm(); } out.bossTag = levelTag(); out.theme5 = levelThemeName; level = 4; startLevel(); for (var j = 0; j < 120; j++){ gameTime += 0.016; update(0.016); render(); } out.eliteTag = levelTag(); out.theme4 = levelThemeName; out.enemyCount = enemyQueue.length; } catch(e){ err = e.message + ' @ ' + (e.stack || '').split('\\n')[1]; } return { err: err, out: out }; })()", context);
   assert('高关卡冒烟：BOSS 关 + 精英关 340 帧 update/render 无异常', smoke.err === null, String(smoke.err));
   assert('高关卡冒烟：BOSS 关标签/地貌正确，精英关队列含 3 只精英', smoke.err === null && smoke.out.bossTag === 'BOSS' && smoke.out.theme5 === '草原' && smoke.out.eliteTag === '精英关' && smoke.out.theme4 === '草原' && smoke.out.enemyCount >= 3, JSON.stringify(smoke.out));
 
