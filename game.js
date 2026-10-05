@@ -28,16 +28,23 @@ const EAGLE_TIME      = 60;  // 老鹰：无敌 60 秒（重复拾取重置计�
  * 玩家基础 2.6 格/秒 × 1.5 = 3.9 格/秒 —— 快过最快的「快速兵」（3.4）；
  * 走一格从 385ms 缩到 256ms，切进口 / 绕后 / 抢道具的差别一眼能看出来。
  * 与「减速」同路：只乘在 statusSpeedMul 上（作用于实际位移），不动 t.speed，
- * 否则会像减速那样每帧反复相乘而漂移。 */
-const SPEED_TIME      = 20;
+ * 否则会像减速那样每帧反复相乘而漂移。
+ * v1.6.3：玩家时长 20 → 30 秒（20 秒常常还没走到下一个道具 / 路口就失效了）。 */
+const SPEED_TIME      = 30;
 const SPEED_MUL_P     = 1.50;
 
 /* ---- 敌人侧平衡（避免敌军拾取道具后关卡崩坏） ---- */
 const ENEMY_SHIELD_TIME   = 6;    // 敌人吃护盾：6 秒（玩家 12 秒）
 const ENEMY_FREEZE_TIME   = 4;    // 敌人吃时钟：冻玩家 4 秒（玩家冻敌 10 秒）
 const ENEMY_AMPHIBIOUS_TIME = 20; // 敌人吃两栖：20 秒
-const ENEMY_SPEED_TIME    = 12;   // 敌人吃加速：12 秒（玩家 20 秒）
+const ENEMY_SPEED_TIME    = 12;   // 敌人吃加速：12 秒（玩家 30 秒）
 const ENEMY_SPEED_MUL     = 1.30; // 敌人加速倍率（低于玩家：否则永远追不上、也逃不掉）
+/* 快速兵（速度兵）单独一套：走**绝对加成**而不是倍率。
+ * 它基础就有 3.4 格/秒（随难度最高 4.49），再乘 1.3 会到 5.8 ~ 7.9 格/秒，
+ * 而玩家吃了加速也只有 3.9 —— 变成追不上也逃不掉。改成固定 +0.75 格/秒
+ * （不随难度放大，最高档约 5.2）后它依旧是全场最快，但留出了操作空间。 */
+const FAST_SPEED_TIME     = 15;   // 快速兵吃加速：15 秒（其它敌人 12 秒）
+const FAST_SPEED_ADD      = 0.75; // 快速兵加速量：+0.75 格/秒（绝对加成，不乘倍率）
 const ENEMY_MAX_POWER     = 2;    // 敌人火力封顶 2 级（3 级会蒸干水塘，拆掉地图结构）
 const ENEMY_ITEM_GREED    = 0.35; // hunter 型敌人主动抢道具的概率（0 = 只在路过时吃到）
 
@@ -1621,7 +1628,13 @@ function spreadBurn(src){
 function statusSpeedMul(t){
   let m = 1;
   if (t.slowT > 0) m *= (t.isPlayer ? SLOW_MUL_P : SLOW_MUL_E);
-  if (t.speedT > 0) m *= (t.isPlayer ? SPEED_MUL_P : ENEMY_SPEED_MUL);   // 涡轮加速
+  if (t.speedT > 0){                                                     // 涡轮加速
+    if (t.isPlayer) m *= SPEED_MUL_P;
+    /* 快速兵：乘上 (speed+0.75)/speed 等价于「速度 +0.75 格/秒」，同样不动 t.speed
+     * （每帧从 t.speed 重算，不会像直接改 t.speed 那样越乘越漂）。 */
+    else if (t.kind === 'fast' && t.speed > 0) m *= (t.speed + FAST_SPEED_ADD) / t.speed;
+    else m *= ENEMY_SPEED_MUL;
+  }
   return Math.max(0.2, m);
 }
 function tickStatus(t, dt){
@@ -1814,13 +1827,17 @@ function pickUpItem(it, tank){
       tank.amphibious = isP ? AMPHIBIOUS_TIME : ENEMY_AMPHIBIOUS_TIME;
       sfx.shield();
       break;
-    case 'speed':
-      /* 涡轮加速：重复拾取刷满时长（不叠加）；与减速同时存在时两者相乘、互相抵消一部分 */
-      tank.speedT = Math.max(tank.speedT, isP ? SPEED_TIME : ENEMY_SPEED_TIME);
+    case 'speed': {
+      /* 涡轮加速：重复拾取刷满时长（不叠加）；与减速同时存在时两者相乘、互相抵消一部分。
+       * 快速兵（速度兵）吃：+0.75 格/秒 / 15 秒 —— 见 FAST_SPEED_* 的注释。 */
+      const spdFast = !isP && tank.kind === 'fast';
+      tank.speedT = Math.max(tank.speedT, isP ? SPEED_TIME : (spdFast ? FAST_SPEED_TIME : ENEMY_SPEED_TIME));
       sfx.itemPickup();
       hint(isP ? (whoTag(tank) + '涡轮加速！移速 ×' + SPEED_MUL_P.toFixed(1) + ' · ' + SPEED_TIME + '秒')
-               : '敌军加速！');
+               : (spdFast ? '速度兵加速！速度 +' + FAST_SPEED_ADD + ' 格/秒 · ' + FAST_SPEED_TIME + '秒'
+                          : '敌军加速！'));
       break;
+    }
     case 'eagle':
       /* 老鹰：立即进入 60 秒无敌。
        * 采用「重置计时器」机制 —— 重复拾取重新计时 60 秒，不做叠加。 */

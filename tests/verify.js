@@ -954,7 +954,7 @@ const t12Mul0 = statusSpeedMul(player);
 items.push({ x:10, y:10, px:player.px, py:player.py, type:'speed', t:0 });
 collectItems();
 const t12 = { speedT: player.speedT, mul: statusSpeedMul(player), speed: player.speed };
-assert('T12 拾取涡轮 → speedT=20、移速 ×1.5，且不改 t.speed 本身',
+assert('T12 拾取涡轮 → speedT=30（玩家）、移速 ×1.5，且不改 t.speed 本身',
        Math.abs(t12.speedT - SPEED_TIME) < 1e-9 && Math.abs(t12.mul - SPEED_MUL_P) < 1e-9 &&
        t12Mul0 === 1 && Math.abs(t12.speed - 2.6) < 1e-9, JSON.stringify(t12));
 
@@ -980,7 +980,7 @@ assert('T12c 加速计时归零后倍率恢复 1',
 /* T12d 敌人侧倍率低于玩家（否则永远追不上、也逃不掉） */
 const t12e = makeTank(6, 6, 2, 'basic', {});
 t12e.speedT = ENEMY_SPEED_TIME;
-assert('T12d 敌人吃加速 → ×1.3 / 12 秒（低于玩家的 ×1.5 / 20 秒）',
+assert('T12d 普通敌人吃加速 → ×1.3 / 12 秒（低于玩家的 ×1.5 / 30 秒）',
        Math.abs(statusSpeedMul(t12e) - ENEMY_SPEED_MUL) < 1e-9 &&
        statusSpeedMul(t12e) < SPEED_MUL_P && ENEMY_SPEED_TIME < SPEED_TIME,
        'mul=' + statusSpeedMul(t12e));
@@ -990,6 +990,41 @@ assert('T12e speedT 已进 TANK_F 且与 tankArr 等长（联机不丢字段）'
        TANK_F.indexOf('speedT') >= 0 && TANK_F.length === tankArr(player).length &&
        Math.abs(arrTank(tankArr(player)).speedT - player.speedT) < 1e-9,
        'TANK_F=' + TANK_F.length + ' arr=' + tankArr(player).length);
+
+/* T12f 玩家时长 30 秒（v1.6.3 由 20 秒上调） */
+assert('T12f 玩家涡轮时长 30 秒（20 秒偏短）', SPEED_TIME === 30, 'SPEED_TIME=' + SPEED_TIME);
+
+/* T12g 快速兵（速度兵）走绝对加成：+0.75 格/秒（不是倍率）、15 秒。
+ * 关键：加速后的有效速度必须正好等于 speed + 0.75，且**低于**原先 ×1.3 的路径
+ * （否则快速兵会到 5.8 ~ 7.9 格/秒，玩家加速后也只有 3.9，逃不掉）。 */
+const t12FastKind = makeTank(6, 6, 2, 'fast', {});
+t12FastKind.speedT = FAST_SPEED_TIME;
+const t12FastEff = t12FastKind.speed * statusSpeedMul(t12FastKind);
+assert('T12g 快速兵吃涡轮 → 速度 +0.75 格/秒（绝对加成）/ 15 秒',
+       Math.abs(t12FastEff - (t12FastKind.speed + FAST_SPEED_ADD)) < 1e-9 &&
+       FAST_SPEED_TIME === 15 && Math.abs(FAST_SPEED_ADD - 0.75) < 1e-9 &&
+       t12FastEff < t12FastKind.speed * ENEMY_SPEED_MUL,
+       'eff=' + t12FastEff.toFixed(3) + ' base=' + t12FastKind.speed.toFixed(3));
+
+/* T12h 快速兵专属：必须不走 1.3 倍的倍率路径 */
+assert('T12h 快速兵不吃 1.3 倍率路径（专属分支生效）',
+       Math.abs(statusSpeedMul(t12FastKind) - ENEMY_SPEED_MUL) > 1e-6,
+       'mul=' + statusSpeedMul(t12FastKind));
+
+/* T12i 其它敌人不受影响（basic / power 仍 ×1.3 / 12 秒），并验证拾取分支给的时长 */
+enemies.length = 0; items.length = 0; keys = {};
+const t12Basic = makeTank(6, 6, 2, 'basic', {});
+const t12Power = makeTank(7, 6, 2, 'power', {});
+const t12It = { type:'speed' };
+pickUpItem(t12It, t12Basic);
+pickUpItem({ type:'speed' }, t12Power);
+t12FastKind.speedT = 0;
+pickUpItem({ type:'speed' }, t12FastKind);
+assert('T12i 拾取分支：普通/火力兵 12 秒，快速兵 15 秒',
+       t12Basic.speedT === ENEMY_SPEED_TIME && t12Power.speedT === ENEMY_SPEED_TIME &&
+       t12FastKind.speedT === FAST_SPEED_TIME &&
+       Math.abs(statusSpeedMul(t12Basic) - ENEMY_SPEED_MUL) < 1e-9,
+       'basic=' + t12Basic.speedT + ' power=' + t12Power.speedT + ' fast=' + t12FastKind.speedT);
 
 /* T13 客方开火本地预测（v1.6.2）：客方开火原本只能等房主快照（一个来回 ≈120ms），
  * 按下开火有明显空档。现在本地立刻生成曳光弹，房主权威子弹到位即交还。 */

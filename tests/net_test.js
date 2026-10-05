@@ -387,9 +387,21 @@ function staticChecks() {
     gjSrc.indexOf("case 'speed':") >= 0 &&
     gjSrc.indexOf('const SPEED_TIME') >= 0 &&
     gjSrc.indexOf('const SPEED_MUL_P') >= 0 &&
-    gjSrc.indexOf('if (t.speedT > 0) m *= (t.isPlayer ? SPEED_MUL_P : ENEMY_SPEED_MUL);') >= 0 &&
+    gjSrc.indexOf('if (t.isPlayer) m *= SPEED_MUL_P;') >= 0 &&
     gjSrc.indexOf("'amphibious','speedT','burnT'") >= 0,
     '缺少涡轮加速的某处实现');
+
+  /* v1.6.3 参数防回退锁：玩家 30 秒；快速兵走绝对加成（+0.75 格/秒 / 15 秒）而非倍率。
+   * 这组数被顺手改回去的话，快速兵会到 5.8 ~ 7.9 格/秒，而玩家加速后只有 3.9。 */
+  assert('涡轮加速参数锁：玩家 30 秒 / 快速兵 +0.75 格/秒 15 秒 / 其它敌人 1.3 倍 12 秒',
+    gjSrc.indexOf('const SPEED_TIME      = 30;') >= 0 &&
+    gjSrc.indexOf('const FAST_SPEED_TIME     = 15;') >= 0 &&
+    gjSrc.indexOf('const FAST_SPEED_ADD      = 0.75;') >= 0 &&
+    gjSrc.indexOf('const ENEMY_SPEED_TIME    = 12;') >= 0 &&
+    gjSrc.indexOf('const ENEMY_SPEED_MUL     = 1.30;') >= 0 &&
+    gjSrc.indexOf("else if (t.kind === 'fast' && t.speed > 0) m *= (t.speed + FAST_SPEED_ADD) / t.speed;") >= 0 &&
+    gjSrc.indexOf("const spdFast = !isP && tank.kind === 'fast';") >= 0,
+    '涡轮加速参数被改动，或快速兵专属分支缺失');
 }
 
 /* ---------- CLI 配置校验 ----------
@@ -637,11 +649,11 @@ function unit() {
   const bd = vm.runInContext("(function(){ level = 5; items = []; var b = makeTank(3,3,0,'boss',{}); b.hp = 1; damageTank(b, 1, 'test'); return { dead: b.dead, dropped: items.length, score: b.score }; })()", context);
   assert('首领阵亡：掉落 2 个道具（force 越过同屏 3 上限），得分 2000', bd.dead === true && bd.dropped === 2 && bd.score === 2000, JSON.stringify(bd));
 
-  // 涡轮加速道具：拾取生效（×1.5 / 20 秒）且 speedT 走快照协议（联机时客方才能看到自己的加速）
+  // 涡轮加速道具：拾取生效（×1.5 / 30 秒）且 speedT 走快照协议（联机时客方才能看到自己的加速）
   const spdUp = vm.runInContext("(function(){ netMode='off'; player2=null; startGame(); levelIntro=0; items=[]; player.speedT=0; items.push({x:player.x,y:player.y,px:player.px,py:player.py,type:'speed',t:0,dead:false}); collectItems(); return { st: player.speedT, mul: statusSpeedMul(player), idx: TANK_F.indexOf('speedT'), back: arrTank(tankArr(player)).speedT, len: TANK_F.length, arr: tankArr(player).length }; })()", context);
-  assert('涡轮加速：拾取后移速 ×1.5 / 20 秒，且 speedT 走快照协议（TANK_F 与 tankArr 等长）',
-    Math.abs(spdUp.st - 20) < 1e-9 && Math.abs(spdUp.mul - 1.5) < 1e-9 &&
-    spdUp.idx >= 0 && Math.abs(spdUp.back - 20) < 1e-9 && spdUp.len === spdUp.arr,
+  assert('涡轮加速：拾取后移速 ×1.5 / 30 秒，且 speedT 走快照协议（TANK_F 与 tankArr 等长）',
+    Math.abs(spdUp.st - 30) < 1e-9 && Math.abs(spdUp.mul - 1.5) < 1e-9 &&
+    spdUp.idx >= 0 && Math.abs(spdUp.back - 30) < 1e-9 && spdUp.len === spdUp.arr,
     JSON.stringify(spdUp));
 
   // 音量总线 / BGM：无 AudioContext 时必须全部是安全空操作（Node 测试环境）
