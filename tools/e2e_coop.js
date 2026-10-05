@@ -212,7 +212,7 @@ function waitMsg(sb, pred, timeout = 2000){
       'host p2.px ' + before.px + ' -> ' + after.px +
       ' | 收到的输入包 k=' + JSON.stringify(stat.inK.slice(0, 24)) + ' 共' + stat.inK.length + '个');
     const gg = guest.get();
-    A('E7 客方画面上的玩家2 位置跟随房主（快照回显）',
+    A('E7 客方画面上的玩家2 与房主保持一致（本地预测 + 快照对账）',
       !!gg.p2 && Math.abs(gg.p2.px - after.px) <= 40,
       'guest p2.px=' + (gg.p2 && gg.p2.px) + ' host p2.px=' + after.px + ' seq=' + gg.snapSeq);
 
@@ -259,6 +259,24 @@ function waitMsg(sb, pred, timeout = 2000){
     A('E12 客方关卡跟随房主（跨端一致，不会各自推进）',
       gNext.level === hNext.level && gNext.state === 'playing',
       'host lvl=' + hNext.level + ' guest lvl=' + gNext.level + ' guest state=' + gNext.state);
+
+    /* 8. 本地预测的长期行为：不能跑飞，也不能在没输入时自己乱动 */
+    guest.setKeys2({ ArrowRight: true });
+    await run(40);
+    const hPred = host.get().p2, gPred = guest.get().p2;
+    A('E13 持续输入 40 帧后，客方本地预测仍紧贴房主权威位置（预测不会跑飞）',
+      !!hPred && !!gPred &&
+      Math.abs(gPred.px - hPred.px) <= 24 && Math.abs(gPred.py - hPred.py) <= 24,
+      'host=(' + hPred.px + ',' + hPred.py + ') guest=(' + gPred.px + ',' + gPred.py + ')');
+
+    guest.setKeys2({});
+    for (let i = 0; i < 8; i++) guest.tick(16.7);     // 先让「松手对格心」收敛完
+    const q1 = guest.get().p2;
+    for (let i = 0; i < 20; i++) guest.tick(16.7);    // 只跑客方、零快照
+    const q2 = guest.get().p2;
+    A('E14 无输入时本地预测不产生位移（松手收敛到格心后即静止）',
+      q1.px === q2.px && q1.py === q2.py,
+      '(' + q1.px + ',' + q1.py + ') -> (' + q2.px + ',' + q2.py + ')');
 
   } catch (e) {
     A('端到端执行无异常', false, (e && e.message) || String(e));

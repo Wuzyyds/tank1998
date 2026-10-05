@@ -879,6 +879,72 @@ assert('T8 过关文案分三种：普通关 / 难度通关 / 全难度通关',
        tTexts.boss.some(t => /难度 1 通关/.test(t)) &&
        tTexts.last.some(t => /全部难度通关/.test(t)),
        JSON.stringify(tTexts).slice(0, 180));
+
+/* T9 转向即时：移动中改方向，下一帧就生效。
+ * 原实现一律「走完当前格再转向」——一格耗时 = TILE20 ÷ 52px/s ≈ 385ms，
+ * 也就是按下方向键后坦克最多还会沿原方向再跑 0.38s 才拐弯（按反方向掉头同理），
+ * 这是「游戏本身就操作不流畅」的主因，也是本次修复的核心。 */
+netMode = 'off'; setDiffStart(1); startGame(); levelIntro = 0; freezePlayer = 0;
+enemies.length = 0; enemyQueue.length = 0; bullets.length = 0;
+for (let ty = 4; ty <= 16; ty++) for (let tx = 4; tx <= 16; tx++) map[ty][tx] = EMPTY;
+player = makeTank(10, 10, 1, 'player', {invuln:0, power:1});
+keys = { ArrowRight: true };
+updatePlayer(0.05); updatePlayer(0.05);          // 向右走 2 帧（约 5px，仍在第 10 格内）
+const t9a = { dir: player.dir, px: player.px, moving: !!player.movingTo };
+keys = { ArrowUp: true };                        // 半格处改向上
+updatePlayer(0.016);
+const t9b = { dir: player.dir, px: player.px, py: player.py, x: player.x, y: player.y };
+assert('T9 转向即时：移动中改方向下一帧即生效（原实现要等走完当前格 ≈385ms）',
+       t9a.dir === 1 && t9a.moving && t9b.dir === 0,
+       'before=' + JSON.stringify(t9a) + ' after=' + JSON.stringify(t9b));
+
+/* T9b 但新方向前方被墙挡住时，必须退回「走到格心再转」——立即转向不能退化成
+ * 「一按就贴墙」，那样反而是手感倒退。两种情况都要保住。 */
+map[9][10] = BRICK;                              // 玩家正上方封住
+player.dir = 1; player.pendingDir = null;
+player.x = 10; player.y = 10; player.px = 10*TILE + TILE/2; player.py = 10*TILE + TILE/2;
+player.movingTo = { x: 11, y: 10 };
+keys = { ArrowRight: true };
+updatePlayer(0.05);
+keys = { ArrowUp: true };
+updatePlayer(0.016);
+const t9c = { dir: player.dir, pending: player.pendingDir };
+assert('T9b 新方向被墙挡住时退回输入缓冲（保留「在下一个路口转弯」的手感）',
+       t9c.dir === 1 && t9c.pending === 0, JSON.stringify(t9c));
+
+/* T10 客方本地预测：客方不跑模拟，位置原先只能等房主快照（一个来回 ≈70ms 起），
+ * 按方向键到屏幕上有反应有明显滞后。预测让「按键」立刻在画面上生效。 */
+netMode = 'guest'; coopReady = true; coopDropped = false; paused = false;
+state = 'playing'; freezePlayer = 0;
+for (let ty = 4; ty <= 16; ty++) for (let tx = 4; tx <= 16; tx++) map[ty][tx] = EMPTY;
+player2 = makeTank(8, 12, 1, 'player', {invuln:0, power:1});
+keys2 = { ArrowDown: true };
+const t10y0 = player2.py;
+for (let i = 0; i < 6; i++) predictGuestPlayer2(0.05);   // 期间没有任何快照
+assert('T10 客方本地预测：无新快照时按方向键，画面上的玩家2 也会立刻响应',
+       player2.py > t10y0, 'py ' + t10y0 + ' -> ' + player2.py);
+
+/* T11 预测对账：偏差小就保留本地预测结果（若每个快照都无脑覆盖，画面会被
+ * 30Hz 的权威位置反复拽回去，反而看出抖动）；偏差大（重生 / 换关 / 被卡住）
+ * 必须采纳房主的权威值。 */
+const t11 = (function(){
+  const mkSnap = () => ({
+    s:'playing', lvl:1, score:0, lives:2, lives2:2, fe:0, fp:0, pe:0, li:0, base:1,
+    p: tankArr(player), p2: tankArr(player2), e:[], b:[], it:[], ex:[], gb:[],
+  });
+  player2.px = 170; player2.py = 250;
+  const s1 = mkSnap();
+  s1.p2[TANK_F.indexOf('px')] = 173;             // 与本地预测只差 3px
+  applySnapshot(s1);
+  const near = player2.px;
+  const s2 = mkSnap();
+  s2.p2[TANK_F.indexOf('px')] = 370;             // 差 200px：明显分歧
+  applySnapshot(s2);
+  return { near: near, far: player2.px };
+})();
+assert('T11 预测对账：小偏差保留本地预测（不抖），大偏差才回落到房主权威位置',
+       Math.abs(t11.near - 170) < 1 && Math.abs(t11.far - 370) < 1, JSON.stringify(t11));
+netMode = 'off'; keys2 = {}; keys = {};
 `;
 
 let err = null;

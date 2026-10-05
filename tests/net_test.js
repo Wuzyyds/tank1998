@@ -317,9 +317,42 @@ function staticChecks() {
 
   /* 快照发送条件：过关(clear) / 结束(over) 也必须发快照 —— 原先只在 playing 时发，
    * 联机实测表现为「房主过关后客方画面冻住数秒，且永远看不到关卡完成 / GAME OVER」。 */
-  const snapOk = gjSrc.indexOf("} else if (state !== 'title' && Net.bufferedAmount() < 262144){") >= 0;
+  const snapOk = gjSrc.indexOf("} else if (state !== 'title' && Net.bufferedAmount() < SNAP_BACKPRESSURE){") >= 0;
   assert('房主在过关 / 结束时也发快照（否则客方停在上一帧、看不到结算界面）', snapOk,
     snapOk ? '' : '未找到 clear/over 也发快照的条件');
+
+  /* ---- 联机手感（v1.6.1）：三条「改回去就会明显变卡 / 变延迟」的静态锁 ---- */
+  const tickM = /const NET_TICK = 1 \/ (\d+);/.exec(gjSrc);
+  const tickHz = tickM ? +tickM[1] : 0;
+  assert('收发节拍 ≥30Hz（原先 20Hz：客方画面 50ms 才刷一次、按键最坏等 50ms 才发出）',
+    tickHz >= 30, 'NET_TICK = 1/' + (tickHz || '?') + ' s');
+
+  const bpM = /const SNAP_BACKPRESSURE = (\d+);/.exec(gjSrc);
+  const bp = bpM ? +bpM[1] : 0;
+  assert('发送缓冲上限 ≤64KB（原先 256KB ≈ 允许积压 4 秒快照，弱网下延迟一路叠加）',
+    bp > 0 && bp <= 65536, 'SNAP_BACKPRESSURE = ' + (bp || '?') + ' 字节');
+
+  const inputImmediate =
+    gjSrc.indexOf('function sendGuestInput(){') >= 0 &&
+    gjSrc.indexOf('if (keys2[code] === val) return;') >= 0 &&
+    gjSrc.indexOf('    sendGuestInput();') >= 0;
+  assert('客方按键一变化就立刻发包（不再干等节拍器，消掉 0~33ms 输入采样延迟）', inputImmediate,
+    inputImmediate ? '' : 'setKey 的客方分支未做到「变化即发」');
+
+  const turnImmediate =
+    gjSrc.indexOf('function wantDir(t, want){') >= 0 &&
+    gjSrc.indexOf('drivePlayerTank(player, keys, dt);') >= 0 &&
+    gjSrc.indexOf('player.pendingDir = want') < 0 &&
+    gjSrc.indexOf('player2.pendingDir = want') < 0;
+  assert('转向即时：移动中改方向下一帧即生效（原先一律「走完当前格再转向」≈385ms）', turnImmediate,
+    turnImmediate ? '' : '未走 wantDir / 仍无条件写 pendingDir');
+
+  const predOk =
+    gjSrc.indexOf('function predictGuestPlayer2(dt){') >= 0 &&
+    gjSrc.indexOf('    else predictGuestPlayer2(dt);') >= 0 &&
+    gjSrc.indexOf('const PRED_TOL = ') >= 0;
+  assert('客方本地预测已接入（画面立刻响应），且带容差对账（防跑飞 / 防抖动）', predOk,
+    predOk ? '' : '未找到 predictGuestPlayer2 的定义或调用');
 }
 
 /* ---------- CLI 配置校验 ----------

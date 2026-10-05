@@ -877,8 +877,18 @@ let keys2 = {};             // 玩家2 的输入：房主侧由客方上报写�
 let player2 = null;         // 玩家2 坦克
 let lives2 = 2;             // 玩家2 独立命数
 let netMode = 'off';        // 'off' | 'host' | 'guest'
-let netSendAcc = 0;         // 网络发包节流累加器（20Hz）
+let netSendAcc = 0;         // 网络发包节流累加器
 let pauseBeat  = 0;         // 暂停心跳累加器：暂停期间不发快照，改用 4Hz 轻量心跳维持状态同步
+/* ---- 联机节奏与背压（v1.6.1 手感修复）----
+ * NET_TICK：快照 / 输入包的节拍。原先 0.05s（20Hz）——客方画面每 50ms 才刷新一次，
+ *   而且「按下一个键」最坏要等满 50ms 才被发出去。提到 30Hz 后两项都明显改善；
+ *   单帧快照约 2KB，30Hz ≈ 60KB/s，公网带宽完全吃得下。
+ * SNAP_BACKPRESSURE：发送缓冲上限。原先 262144（256KB）——按 60KB/s 算相当于允许
+ *   积压 **4 秒以上** 的快照。弱网下缓冲排不空，延迟会一路叠加，用户看到的就是
+ *   「画面越来越滞后、越玩越卡」。收到 16KB（约 8 帧 / 0.27s）就跳帧让缓冲排空，
+ *   把最坏滞后钉在几百毫秒内。 */
+const NET_TICK = 1 / 30;
+const SNAP_BACKPRESSURE = 16384;
 let coopReady = false;      // 客方是否已收到首帧快照
 let coopDropped = false;    // 对方掉线（重连窗口内）
 let coopRoomCode = '';
@@ -1214,6 +1224,53 @@ function enemyThink(e){
 }
 
 /* ================= 更新 ================= */
+
+/* 转向：能立刻转就立刻转，不能才缓冲到格心。
+ * 原实现一律「走完当前格再转向」（新方向存进 pendingDir，等走到格心才生效）：
+ * 一格耗时 = TILE 20px ÷ (2.6 tile/s × 20px) ≈ 385ms，也就是按下方向键之后，
+ * 坦克最多还会沿原方向再跑 0.38 秒才拐弯 —— 这是「游戏本身就操作不流畅」的主因，
+ * 反向（按下反方向）时尤其明显，要先跑完一整格才掉头。
+ * 立即转向必须先把坦克对到格心（否则会斜向漂移、卡墙角），所以这里先算出
+ * 「会落到哪一格」，再试探该格在新方向上能否进入：能就立即转，不能就退回缓冲 ——
+ * 后者恰好保留「提前按方向键、在下一个路口再转弯」的输入缓冲手感，两种情况都不丢。 */
+const __probeCell = { x: 0, y: 0 };   // 复用同一个对象，避免每帧新建（见「每帧禁止分配」）
+function wantDir(t, want){
+  if (t.dir === want){ if (t.pendingDir != null) t.pendingDir = null; return; }
+  if (!t.movingTo){ t.dir = want; t.pendingDir = null; return; }
+  const lx = Math.round((t.px - TILE/2) / TILE);
+  const ly = Math.round((t.py - TILE/2) / TILE);
+  const d = DIRS[want];
+  __probeCell.x = lx + d.dx;
+  __probeCell.y = ly + d.dy;
+  if (canEnter(t, __probeCell)){
+    t.dir = want;              // 立即转向；updateTankMove 会把位置对到格心
+    t.pendingDir = null;
+  } else {
+    t.pendingDir = want;       // 新方向前方不通：退回「到格心再转」
+  }
+}
+
+/* 玩家坦克的「读输入 → 转向 → 位移」这一段。房主与客方本地预测共用同一份实现，
+ * 保证两边跑的是同一套运动学 —— 否则客方的预测会系统性偏移，对账时被反复拽回。 */
+function drivePlayerTank(t, ks, dt){
+  const up = ks.ArrowUp || ks.KeyW, down = ks.ArrowDown || ks.KeyS,
+        left = ks.ArrowLeft || ks.KeyA, right = ks.ArrowRight || ks.KeyD;
+  let want = -1;
+  if (up) want = 0;
+  else if (right) want = 1;
+  else if (down) want = 2;
+  else if (left) want = 3;
+
+  if (want >= 0){
+    wantDir(t, want);
+    updateTankMove(t, dt);
+  } else {
+    if (t.movingTo) snapToGrid(t);
+    t.movingTo = null;
+    if (t.pendingDir != null){ t.dir = t.pendingDir; t.pendingDir = null; }
+  }
+}
+
 function updatePlayer(dt){
   if (player.dead){
     player.deadTimer -= dt;
@@ -1232,25 +1289,7 @@ function updatePlayer(dt){
   }
   if (freezePlayer > 0) return;   // 被时钟冻结：不动也不能射
 
-  const up = keys.ArrowUp || keys.KeyW, down = keys.ArrowDown || keys.KeyS,
-        left = keys.ArrowLeft || keys.KeyA, right = keys.ArrowRight || keys.KeyD;
-  let want = -1;
-  if (up) want = 0;
-  else if (right) want = 1;
-  else if (down) want = 2;
-  else if (left) want = 3;
-
-  if (want >= 0){
-    if (player.dir !== want){
-      if (player.movingTo) player.pendingDir = want;   // 走完当前格再转向
-      else player.dir = want;
-    }
-    updateTankMove(player, dt);
-  } else {
-    if (player.movingTo) snapToGrid(player);
-    player.movingTo = null;
-    if (player.pendingDir != null){ player.dir = player.pendingDir; player.pendingDir = null; }
-  }
+  drivePlayerTank(player, keys, dt);
 
   if ((keys.Space || keys.KeyJ) && player.overheatT <= 0){
     player.bulletCd -= dt;
@@ -1282,25 +1321,7 @@ function updatePlayer2(dt){
   }
   if (freezePlayer > 0) return;
 
-  const up = keys2.ArrowUp || keys2.KeyW, down = keys2.ArrowDown || keys2.KeyS,
-        left = keys2.ArrowLeft || keys2.KeyA, right = keys2.ArrowRight || keys2.KeyD;
-  let want = -1;
-  if (up) want = 0;
-  else if (right) want = 1;
-  else if (down) want = 2;
-  else if (left) want = 3;
-
-  if (want >= 0){
-    if (player2.dir !== want){
-      if (player2.movingTo) player2.pendingDir = want;
-      else player2.dir = want;
-    }
-    updateTankMove(player2, dt);
-  } else {
-    if (player2.movingTo) snapToGrid(player2);
-    player2.movingTo = null;
-    if (player2.pendingDir != null){ player2.dir = player2.pendingDir; player2.pendingDir = null; }
-  }
+  drivePlayerTank(player2, keys2, dt);
 
   if ((keys2.Space || keys2.KeyJ) && player2.overheatT <= 0){
     player2.bulletCd -= dt;
@@ -3061,7 +3082,21 @@ function applySnapshot(s){
     }
   }
   player = arrTank(s.p);
-  player2 = s.p2 ? arrTank(s.p2) : null;
+  /* 客方玩家2 的「本地预测对账」：误差在 PRED_TOL 内就保留本地预测出来的位置，
+   * 否则采纳房主的权威值。若每个快照都无脑覆盖，本地预测等于白做 ——
+   * 画面会被 30Hz 的权威位置反复拽回去，反而看出抖动。 */
+  const np2 = s.p2 ? arrTank(s.p2) : null;
+  if (np2 && netMode === 'guest' && player2 && !np2.dead && !player2.dead){
+    const ddx = player2.px - np2.px, ddy = player2.py - np2.py;
+    if (ddx*ddx + ddy*ddy <= PRED_TOL*PRED_TOL){
+      np2.px = player2.px; np2.py = player2.py;
+      np2.x  = player2.x;  np2.y  = player2.y;
+      np2.dir = player2.dir;
+      np2.movingTo = player2.movingTo;
+      np2.pendingDir = player2.pendingDir;
+    }
+  }
+  player2 = np2;
   enemies = s.e.map(arrTank);
   bullets = s.b.map(arrBullet);
   items = s.it.map(i => ({ x:i[0], y:i[1], px:i[2], py:i[3], type:i[4], t:i[5], dead:false }));
@@ -3087,6 +3122,23 @@ function unpackInput(b){
     KeyW: !!(b&1), KeyS: !!(b&2), KeyA: !!(b&4), KeyD: !!(b&8),
     Space: !!(b&16), KeyJ: !!(b&16),
   };
+}
+
+/* ---- 客方本地预测（只推进「自己那台坦克」的画面位置，不产生任何权威状态）----
+ * 客方不跑模拟，位置原本只能等房主快照 —— 一个来回（上行 + 房主一帧 + 下行）
+ * 起手就是 70ms 量级，按方向键之后屏幕上要过一会儿才有反应，这是联机「操作延迟」
+ * 里无法靠提高频率消掉的那一段。
+ * 做法：用与房主完全相同的运动学（drivePlayerTank）先跑一步，让画面立刻响应；
+ * 快照到达时在 applySnapshot 里按容差对账（误差小就保留本地结果，超了才采纳权威值）。
+ * 两边跑同一份确定性代码、又都会吸附到格心，所以正常情况偏差只有几个像素；
+ * 真正分歧（死亡 / 重生 / 换关 / 被别的坦克卡住）时误差会立刻超标，自然回落到权威值。 */
+const PRED_TOL = 12;            // 像素：超过就认定与房主分歧，直接采纳权威位置
+function predictGuestPlayer2(dt){
+  if (netMode !== 'guest' || !coopReady || coopDropped) return;
+  if (state !== 'playing' || paused || freezePlayer > 0) return;
+  const t = player2;
+  if (!t || t.dead) return;
+  drivePlayerTank(t, keys2, dt);
 }
 
 /* ================= 双人合作：连接与 UI ================= */
@@ -3293,10 +3345,22 @@ function getLanInfo(){
 }
 
 /* ================= 输入 ================= */
+/* 客方输入包。客方不跑模拟，它的「操作」只有送到房主才生效，所以发送时机很关键：
+ * 原先只能等 30Hz 定时器，按下到发出的采样延迟平均 16ms、最坏 33ms。
+ * 改成「键位一有变化立刻发」，采样延迟归零；定时包退化成兜底
+ * （键位不变时维持 ack / RTT 采样，并防丢包）。 */
+function sendGuestInput(){
+  if (netMode !== 'guest') return;
+  if (typeof Net === 'undefined' || !Net.isOpen()) return;
+  Net.send({ type:'input', k: packInput(keys2), ack: applySnapshot.lastSeq });
+}
 function setKey(code, val){
   // 双人客方：本地键盘/触屏控制玩家2（键位写入 keys2，由房主快照回显）
-  if (netMode === 'guest') keys2[code] = val;
-  else keys[code] = val;
+  if (netMode === 'guest'){
+    if (keys2[code] === val) return;   // 无变化不重复发包（按住方向键的自动重复也在此被吃掉）
+    keys2[code] = val;
+    sendGuestInput();
+  } else keys[code] = val;
 }
 
 /* 统一的“开始 / 重新开始 / 下一关”入口。
@@ -3733,7 +3797,8 @@ function loop(now){
   last = now;
   if (!paused){
     gameTime += dt;
-    if (netMode !== 'guest') update(dt);   // 客方纯渲染，不模拟
+    if (netMode !== 'guest') update(dt);   // 房主 / 单人：跑完整模拟
+    else predictGuestPlayer2(dt);          // 客方：只为自己那台坦克做本地预测（纯画面，权威仍在房主）
   }
   tuneQuality(dt);   // 持续掉帧时自动降一档 DPR（详见上方注释）
   /* 网络收发（20Hz）：房主发快照，客方发输入。
@@ -3741,14 +3806,14 @@ function loop(now){
    * 告诉客方「一起停」；客方也要继续上报输入，否则房主侧玩家2会保持最后一次输入不放。 */
   if (netMode !== 'off' && typeof Net !== 'undefined' && Net.isOpen()){
     netSendAcc += dt;
-    if (netSendAcc >= 0.05){
+    if (netSendAcc >= NET_TICK){
       netSendAcc = 0;
       if (netMode === 'host'){
         if (paused){
           // 4Hz 暂停心跳：兜住 pause 消息丢包，让客方跟上暂停/继续
-          pauseBeat += 0.05;
+          pauseBeat += NET_TICK;
           if (pauseBeat >= 0.25){ pauseBeat = 0; Net.send({ type:'pause', v:1 }); }
-        } else if (state !== 'title' && Net.bufferedAmount() < 262144){
+        } else if (state !== 'title' && Net.bufferedAmount() < SNAP_BACKPRESSURE){
           /* 背压：上行积压时跳过一次快照，避免弱网下雪崩（输入包极小，永不跳过）。
            * 过关(clear) 与结束(over) 也必须发：这两个状态原先完全不发快照，
            * 客方就停在上一帧的「playing」不动 —— 过关时看起来像卡死，
@@ -3759,7 +3824,7 @@ function loop(now){
         Net.send({ type:'input', k: packInput(keys2), ack: applySnapshot.lastSeq });
         if (paused){
           // 客方同样重发暂停请求：房主没收到请求时，客方不会单方面停住
-          pauseBeat += 0.05;
+          pauseBeat += NET_TICK;
           if (pauseBeat >= 0.25){ pauseBeat = 0; Net.send({ type:'pause', v:1 }); }
         }
       }
