@@ -1101,6 +1101,108 @@ assert('T13g 暂停 / 非对局 / 掉线时立即收掉曳光弹（不留残影�
        t13res === 1 && t13P === 0 && t13S === 0 && t13Pre === 1 && t13D === 0,
        JSON.stringify({ res: t13res, paused: t13P, clear: t13S, dropped: t13D }));
 
+
+/* ---------- U. 手机横屏：进入即全屏 + 横屏（v1.6.4） ----------
+ * 原实现只有「开始游戏 / 双人游戏」两个按钮会触发，且只尝试一次、失败后无任何提示 ——
+ * 手机上就表现为「画面一直是竖的、游戏区被压成中间一小块，还以为游戏坏了」。 */
+
+/* U1 竖屏判定必须在任何环境里都有答案且不抛错（沙箱里 screen / window.orientation / innerWidth 全无） */
+const uSavedCoarse = coarsePointer;
+let uPortraitOk = false;
+try { uPortraitOk = isPortraitViewport() === false; } catch (e) { uPortraitOk = false; }
+assert('U1 竖屏判定在缺失 screen / window.orientation / innerWidth 的环境里不抛错且有默认答案',
+       uPortraitOk, 'portrait=false? ' + uPortraitOk);
+
+/* U2 锁方向要留退路：标准 API 先要 landscape-primary，被拒后退回 landscape。
+ * 这里用一个「catch 同步回调」的假 Promise，免得断言要等微任务。 */
+const uLockCalls = [];
+const uSavedScreen = (typeof screen !== 'undefined') ? screen : undefined;
+screen = { orientation: { type:'portrait-primary', lock: (v) => {
+  uLockCalls.push(v);
+  return { catch: (fn) => { if (v === 'landscape-primary') fn(); return { catch: () => {} }; } };
+} } };
+coarsePointer = false;
+const uLockDesk = lockLandscape() === null && uLockCalls.length === 0;
+coarsePointer = true;
+lockLandscape();
+const uLockSeq = uLockCalls.join(',');
+assert('U2 锁横屏：桌面不动；触屏按 landscape-primary → landscape 依次退路',
+       uLockDesk && uLockSeq === 'landscape-primary,landscape', uLockSeq);
+
+/* U3 没有标准 lock 时走老前缀实现（老安卓 / WebView），且只取第一个可用的 */
+const uLegacy = [];
+screen = { lockOrientation: (v) => { uLegacy.push(v); return true; },
+           mozLockOrientation: () => { uLegacy.push('moz'); return true; } };
+lockLandscape();
+assert('U3 无标准 lock 时退回 screen.lockOrientation（只取第一个可用前缀）',
+       uLegacy.length === 1 && uLegacy[0] === 'landscape', JSON.stringify(uLegacy));
+
+/* U4 全屏 API 缺失时（微信 / 老 WebView）仍要尝试锁方向，而不是整个放弃 */
+const uSavedFs = document.documentElement.requestFullscreen;
+document.documentElement.requestFullscreen = undefined;
+const uLock2 = [];
+screen = { orientation: { type:'portrait-primary', lock: (v) => { uLock2.push(v); return { catch: () => {} }; } } };
+coarsePointer = true;
+tryAutoLandscape();
+assert('U4 requestFullscreen 缺失时仍然尝试锁方向（只锁方向也强过完全不动）',
+       uLock2.length === 1, JSON.stringify(uLock2));
+document.documentElement.requestFullscreen = uSavedFs;
+
+/* U5 闸门：只有「触屏 + 竖屏」才挡；横屏与桌面都不打扰 */
+const uGate = document.getElementById('rotate-gate');
+const uCls = [];
+uGate.classList = { toggle:(c,on)=>{ uCls.push(c + '=' + !!on); }, add:NO, remove:NO, contains:()=>false };
+rotDismissed = false;
+screen = { orientation: { type:'portrait-primary', lock: () => ({ catch: () => {} }) } };
+coarsePointer = true;  syncRotateGate();
+const uGatePortrait = uCls[uCls.length-1] === 'show=true' && rotGateOn === true;
+uCls.length = 0;
+screen = { orientation: { type:'landscape-primary', lock: () => ({ catch: () => {} }) } };
+syncRotateGate();
+const uGateLandscape = uCls[uCls.length-1] === 'show=false';
+uCls.length = 0;
+screen = { orientation: { type:'portrait-primary', lock: () => ({ catch: () => {} }) } };
+coarsePointer = false; syncRotateGate();
+const uGateDesk = uCls[uCls.length-1] === 'show=false';
+assert('U5 竖屏闸门：触屏 + 竖屏才显示，横屏与桌面都不打扰',
+       uGatePortrait && uGateLandscape && uGateDesk, JSON.stringify(uCls));
+
+/* U6 尝试过一次仍未横屏 → 文案改成手动指引；选了「竖屏继续玩」就不再反复弹 */
+coarsePointer = true; rotDismissed = false; rotTried = 1;
+syncRotateGate();
+const uMsgManual = rgDesc.textContent.indexOf('手动') >= 0;
+rotDismissed = true; syncRotateGate();
+const uDismissed = rotGateOn === false;
+assert('U6 选择「竖屏继续玩」后不再弹出；尝试失败后文案改为手动指引',
+       uDismissed && uMsgManual, 'manual=' + uMsgManual + ' dismissed=' + uDismissed);
+
+/* U7 第一次触摸/点击就尝试（不局限于「开始游戏」按钮）—— 浏览器只认手势，但不限定元素 */
+const uDocH = {};
+const uSavedAdd = document.addEventListener;
+document.addEventListener = (t, f) => { (uDocH[t] = uDocH[t] || []).push(f); };
+armFirstGestureLandscape();
+const uArmed = !!(uDocH.pointerdown && uDocH.pointerdown.length) && !!(uDocH.touchstart && uDocH.touchstart.length);
+let uFsCalls = 0;
+document.documentElement.requestFullscreen = () => { uFsCalls++; return Promise.resolve(); };
+coarsePointer = true;  rotFirstDone = false;
+uDocH.pointerdown[0]({});
+const uFirst = uFsCalls === 1;
+uDocH.pointerdown[0]({});                    // 第二次不应再请求
+const uOnce = uFsCalls === 1;
+coarsePointer = false; rotFirstDone = false;
+uDocH.touchstart[0]({});
+const uDeskNoop = uFsCalls === 1;
+document.addEventListener = uSavedAdd;
+document.documentElement.requestFullscreen = uSavedFs;
+assert('U7 第一次触摸/点击即尝试全屏横屏（只触发一次，桌面不触发）',
+       uArmed && uFirst && uOnce && uDeskNoop, 'armed=' + uArmed + ' fs=' + uFsCalls);
+
+screen = uSavedScreen;
+coarsePointer = uSavedCoarse;
+rotDismissed = false;
+rotTried = 0;
+syncRotateGate();
+
 netMode = 'off'; keys2 = {}; keys = {};
 `;
 

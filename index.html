@@ -20,7 +20,18 @@
 <body class="idle" data-page-node-id="9788yFON9sf9Sj9v65yzMs">
 <h1 data-page-node-id="QCyVPedsXkQYzCfZp5Dc1L">坦克大战</h1>
 <div class="sub" data-page-node-id="g0fdJnETS5qrHl1hMnG1TW">TANK 1998 · 增强版 · 3 级火力 · 7 种武器 · 随机地形 · 智能敌军</div>
-<div id="rotate-hint">点「开始游戏」会自动全屏并转为横屏，操作更顺手</div>
+<!-- 手机竖屏闸门：进入游戏会自动请求「全屏 + 锁定横屏」。若被系统或浏览器拦下
+     （iOS Safari 不支持锁方向、系统「自动旋转」被关掉、微信内置浏览器没有全屏 API），
+     这里给出明确指引，而不是让玩家对着一小块竖屏画面以为游戏坏了 -->
+<div id="rotate-gate">
+  <div class="rg-box">
+    <div class="rg-icon">📱</div>
+    <div class="rg-title">横屏游玩</div>
+    <p id="rg-desc" class="rg-desc">本游戏按横屏设计：点下面的按钮自动进入全屏横屏。</p>
+    <button id="rg-retry" class="rg-btn primary">⛶ 全屏并横屏</button>
+    <button id="rg-skip" class="rg-btn">竖屏继续玩</button>
+  </div>
+</div>
 <div id="wrap" data-page-node-id="3u7joqQMIewsonERqcJzxo">
 <canvas id="game" width="680" height="520" data-page-node-id="ikkSJFuA69Y8OMU0x7AWrN"></canvas>
 <!-- 手机端 DOM HUD：canvas 右侧面板在小屏被等比缩到不可读，触屏设备改由此处呈现 -->

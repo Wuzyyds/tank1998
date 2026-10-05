@@ -213,14 +213,15 @@ async function integration() {
                   'id="relay-url"', 'id="btn-relay"', 'id="relay-now"', 'id="coop-lan"',
                   'id="center-actions"', 'id="ca-start"', 'id="ca-restart"', 'id="ca-resume"', 'id="ca-next"',
                   'id="ca-title"', 'id="ca-coop"', 'id="ca-codex"', 'id="ca-set"', 'id="ca-mute"',
-                  'id="play-ctl"', 'id="ctl-pause"', 'id="ctl-mute"'];
+                  'id="play-ctl"', 'id="ctl-pause"', 'id="ctl-mute"',
+                  'id="rotate-gate"', 'id="rg-desc"', 'id="rg-retry"', 'id="rg-skip"'];
     const missing = need.filter(s => html.indexOf(s) < 0);
     assert('index.html 含设置弹窗 / HUD / 中继面板 / 画面内菜单（DOM id 齐全）', missing.length === 0, 'missing=' + missing.join(','));
 
     /* 反向检查：原先画布上方的工具栏与页脚说明必须已经移除。
      * 否则会出现「两套入口并存」——工具栏在手机上离拇指很远，用户以为没做改动。 */
     const banned = ['class="toolbar"', '<footer', 'id="btn-start"', 'id="btn-pause"', 'id="set-panel"',
-                    'id="seg-hp"'];
+                    'id="seg-hp"', 'id="rotate-hint"'];
     const stillThere = banned.filter(s => html.indexOf(s) >= 0);
     assert('index.html 已移除顶部工具栏、页脚说明与「血量档位」（按钮全部搬进画面内）',
       stillThere.length === 0, 'still=' + stillThere.join(','));
@@ -402,6 +403,23 @@ function staticChecks() {
     gjSrc.indexOf("else if (t.kind === 'fast' && t.speed > 0) m *= (t.speed + FAST_SPEED_ADD) / t.speed;") >= 0 &&
     gjSrc.indexOf("const spdFast = !isP && tank.kind === 'fast';") >= 0,
     '涡轮加速参数被改动，或快速兵专属分支缺失');
+
+  /* v1.6.4 手机横屏防回退锁：① 第一次触摸/点击就尝试（不能只剩「开始游戏」一个入口）；
+   * ② 全屏真正生效后再补锁一次；③ 锁方向有 landscape-primary → landscape 退路；
+   * ④ 失败要有闸门提示（原先静默竖屏，玩家只看到画面小、以为坏了）。 */
+  const rotOk =
+    gjSrc.indexOf('function armFirstGestureLandscape(){') >= 0 &&
+    gjSrc.indexOf('function onFirstGestureLandscape(){') >= 0 &&
+    gjSrc.indexOf('function tryAutoLandscape(){') >= 0 &&
+    gjSrc.indexOf('function syncRotateGate(){') >= 0 &&
+    gjSrc.indexOf("document.addEventListener('fullscreenchange'") >= 0 &&
+    gjSrc.indexOf("so.lock('landscape-primary')") >= 0 &&
+    gjSrc.indexOf("so.lock('landscape')") >= 0 &&
+    gjSrc.indexOf("'lockOrientation', 'mozLockOrientation', 'msLockOrientation'") >= 0 &&
+    gjSrc.indexOf("armFirstGestureLandscape();") >= 0 &&
+    gjSrc.indexOf("armOrientationWatch();") >= 0;
+  assert('手机横屏：首次手势即尝试 + 全屏后补锁 + 方向锁有退路 + 失败弹闸门（缺一即回退）',
+    rotOk, rotOk ? '' : '横屏链路不完整');
 }
 
 /* ---------- CLI 配置校验 ----------

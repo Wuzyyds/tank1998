@@ -3672,44 +3672,166 @@ const setFs      = document.getElementById('set-fs');
 const setFlash   = document.getElementById('set-flash');
 const diffRow    = document.getElementById('diff-row');    // 难度选择行（标题页菜单）
 const diffPick   = document.getElementById('diff-pick');   // 难度选择行里的一排按钮
+const rgGate     = document.getElementById('rotate-gate'); // 手机竖屏闸门（自动横屏失败时的指引）
+const rgDesc     = document.getElementById('rg-desc');
+const rgRetry    = document.getElementById('rg-retry');
+const rgSkip     = document.getElementById('rg-skip');
 
 function toggleFit(){
   document.body.classList.toggle('fit');
   if (setFit) setFit.classList.toggle('on', document.body.classList.contains('fit'));
 }
-/* 全屏整页（documentElement）而不是 #wrap：图鉴 / 设置 / 联机弹窗都是 #wrap 的
- * 兄弟节点，若全屏 #wrap，它们在 fullscreen 的 top layer 下会被一起藏掉 ——
- * 表现为「手机全屏后点设置是一片黑」。 */
-function toggleFullscreen(){
-  const el = document.documentElement;
-  if (!document.fullscreenElement){
-    let r = null;
-    try {
-      if (el.requestFullscreen) r = el.requestFullscreen({ navigationUI:'hide' });
-      else if (el.webkitRequestFullscreen) r = el.webkitRequestFullscreen();
-    } catch (e) { r = null; }
-    if (r && typeof r.then === 'function') r.then(lockLandscape).catch(lockLandscape);
-    else lockLandscape();
-  } else if (document.exitFullscreen) document.exitFullscreen();
+/* ================= 全屏 / 手机横屏 =================
+ * 手机玩家进游戏后画面一直是竖的（游戏区被压成中间一小块正方形，摇杆还压在上面），
+ * 根因是「自动横屏」只挂在「开始游戏 / 双人游戏」两个按钮上、只尝试一次、
+ * 失败后没有任何提示。三条修法：
+ *   ① 第一次触摸/点击就尝试 —— 浏览器只认用户手势，但并不限定是哪个元素；
+ *   ② 全屏 API 与锁方向 API 各留多条退路，全屏真正生效后再补锁一次；
+ *   ③ 全都失败（iOS Safari 不支持锁方向、系统「自动旋转」被关掉、微信/老 WebView
+ *      没有全屏 API）时弹出闸门给出明确指引，而不是静默竖屏让人以为是坏了。 */
+const ROT_MAX_TRY = 3;
+let rotTried = 0, rotFirstDone = false, rotDismissed = false, rotTimer = 0, rotGateOn = false;
+
+/* 当前是否竖屏：优先 screen.orientation，其次老的 window.orientation，最后退回视口尺寸。
+ * 沙箱 / 老浏览器里前两者都可能不存在，最后一步保证永远有答案（且不抛错）。 */
+function isPortraitViewport(){
+  try {
+    const so = (typeof screen !== 'undefined' && screen.orientation) ? screen.orientation : null;
+    if (so && typeof so.type === 'string' && so.type.indexOf('portrait') === 0) return true;
+    if (so && typeof so.type === 'string' && so.type.indexOf('landscape') === 0) return false;
+    if (typeof window !== 'undefined' && typeof window.orientation === 'number'){
+      return window.orientation === 0 || window.orientation === 180;
+    }
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'){
+      if (window.matchMedia('(orientation: portrait)').matches) return true;
+      if (window.matchMedia('(orientation: landscape)').matches) return false;
+    }
+  } catch (e) { /* 环境缺失则退回尺寸判断 */ }
+  const vw = (typeof innerWidth === 'number') ? innerWidth : 0;
+  const vh = (typeof innerHeight === 'number') ? innerHeight : 0;
+  return !!vw && !!vh && vh > vw;
 }
-/* 锁定横屏。浏览器只在「全屏 + 用户手势」中才允许锁定方向，这里只做尽力而为：
- * 失败（iOS Safari 不支持 / 尚未全屏）静默放弃，页面顶部的 #rotate-hint 仍会提示手动转屏。 */
+/* 请求整页全屏。全屏对象是 documentElement 而不是 #wrap：图鉴 / 设置 / 联机弹窗
+ * 都是 #wrap 的兄弟节点，若全屏 #wrap，它们在 fullscreen 的 top layer 下会被藏掉 ——
+ * 表现为「手机全屏后点设置是一片黑」。 */
+function requestFullScreenNow(){
+  const el = document.documentElement;
+  if (!el) return null;
+  let r = null;
+  try {
+    if (typeof el.requestFullscreen === 'function') r = el.requestFullscreen({ navigationUI:'hide' });
+    else if (typeof el.webkitRequestFullscreen === 'function') r = el.webkitRequestFullscreen();
+  } catch (e) { r = null; }
+  return (r && typeof r.then === 'function') ? r : null;
+}
+/* 锁横屏。浏览器只在「已全屏」时才允许锁方向，且各家实现命名不一：标准
+ * screen.orientation.lock（先要 landscape-primary，被拒再退 landscape）、老前缀
+ * screen.lockOrientation / mozLockOrientation / msLockOrientation。
+ * 返回值恒为 null 是刻意定死的契约 —— 桌面上必须无操作、无 API 时不能抛错。 */
 function lockLandscape(){
   if (!coarsePointer) return null;          // 桌面无需锁定，也避免误锁
   try {
-    if (typeof screen !== 'undefined' && screen.orientation &&
-        typeof screen.orientation.lock === 'function'){
-      const r = screen.orientation.lock('landscape');
-      if (r && typeof r.catch === 'function') r.catch(() => {});
+    const so = (typeof screen !== 'undefined') ? screen.orientation : null;
+    if (so && typeof so.lock === 'function'){
+      const r = so.lock('landscape-primary');
+      if (r && typeof r.catch === 'function'){
+        r.catch(() => {
+          try {
+            const r2 = so.lock('landscape');
+            if (r2 && typeof r2.catch === 'function') r2.catch(() => {});
+          } catch (e) { /* 两次都被拒则放弃 */ }
+        });
+      }
+      return null;
+    }
+    const sc = (typeof screen !== 'undefined') ? screen : null;
+    if (sc){
+      const names = ['lockOrientation', 'mozLockOrientation', 'msLockOrientation'];
+      for (let i = 0; i < names.length; i++){
+        const fn = sc[names[i]];
+        if (typeof fn === 'function'){ try { fn.call(sc, 'landscape'); } catch (e) {} break; }
+      }
     }
   } catch (e) { /* 不支持则忽略 */ }
   return null;
 }
-/* 手机点「开始游戏」时顺手全屏 + 转横屏 —— 这是「进来就横屏」的唯一可行途径。 */
+/* 一次完整尝试：先全屏（锁方向的前提），不论全屏成败都再锁一次方向 ——
+ * 微信 / 老 WebView 里可能根本没有 requestFullscreen，那就只锁方向。 */
+function tryAutoLandscape(){
+  if (!coarsePointer) return;
+  rotTried++;
+  const p = requestFullScreenNow();
+  if (p) p.then(lockLandscape, lockLandscape);
+  else lockLandscape();
+  scheduleRotateGate();
+}
+/* 竖屏闸门：只在「触屏 + 确实还是竖屏 + 用户没选竖屏玩」时挡一下。
+ * 延后 0.9 秒再判定 —— 给浏览器留出转屏动画的时间，能自动转过去就根本不会弹出。 */
+function scheduleRotateGate(){
+  if (rotTimer){ try { clearTimeout(rotTimer); } catch (e) {} rotTimer = 0; }
+  if (typeof setTimeout !== 'function') return;
+  rotTimer = setTimeout(() => { rotTimer = 0; syncRotateGate(); }, 900);
+}
+function syncRotateGate(){
+  const want = !!coarsePointer && !rotDismissed && isPortraitViewport();
+  rotGateOn = want;
+  if (rgGate && rgGate.classList && typeof rgGate.classList.toggle === 'function'){
+    rgGate.classList.toggle('show', want);
+  }
+  /* 文案随尝试次数变：一次都没试过就说「点按钮」，试过还竖着就改成手动指引
+   * （此时多半是 iOS 不支持锁方向、或系统把「自动旋转」关掉了）。 */
+  if (want && rgDesc) rgDesc.textContent = (rotTried === 0)
+    ? '本游戏按横屏设计：点下面的按钮自动进入全屏横屏。'
+    : '没能自动转横屏：请手动把手机横过来。若系统关掉了「自动旋转」，请先打开它再点按钮。';
+}
+/* 手机点「开始游戏 / 双人游戏」时顺手全屏 + 转横屏；闸门里的按钮也复用这里。 */
 function enterMobileFullscreen(){
   if (!coarsePointer) return;
-  if (document.fullscreenElement){ lockLandscape(); return; }
-  toggleFullscreen();
+  if (document.fullscreenElement){ lockLandscape(); scheduleRotateGate(); return; }
+  tryAutoLandscape();
+}
+function toggleFullscreen(){
+  if (!document.fullscreenElement){
+    const p = requestFullScreenNow();
+    if (p) p.then(lockLandscape, lockLandscape);
+    else lockLandscape();
+    scheduleRotateGate();
+  } else if (document.exitFullscreen) document.exitFullscreen();
+}
+/* 第一次交互就尝试全屏横屏：浏览器只认用户手势，但不限定是哪个元素，
+ * 所以在 document 捕获阶段接管「第一次触摸/点击」，不必等用户先找到「开始游戏」。 */
+function onFirstGestureLandscape(){
+  if (!coarsePointer || rotFirstDone) return;
+  rotFirstDone = true;
+  tryAutoLandscape();
+}
+function armFirstGestureLandscape(){
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  const evs = ['pointerdown', 'touchstart', 'mousedown'];
+  for (let i = 0; i < evs.length; i++){
+    document.addEventListener(evs[i], onFirstGestureLandscape, { capture:true, passive:true });
+  }
+}
+/* 转屏 / 进出全屏后复查：全屏真正生效的那一刻补锁一次（之前只在 promise 里锁过），
+ * 竖屏状态变化则同步闸门的显隐。 */
+function armOrientationWatch(){
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function'){
+    document.addEventListener('fullscreenchange', () => {
+      if (coarsePointer && isPortraitViewport() && rotTried < ROT_MAX_TRY){
+        rotTried++;
+        lockLandscape();
+        scheduleRotateGate();
+      } else syncRotateGate();
+    });
+    document.addEventListener('webkitfullscreenchange', () => { syncRotateGate(); });
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function'){
+    window.addEventListener('orientationchange', () => {
+      if (coarsePointer && isPortraitViewport() && rotTried < ROT_MAX_TRY){ rotTried++; lockLandscape(); }
+      scheduleRotateGate();
+    });
+    window.addEventListener('resize', () => { syncRotateGate(); });
+  }
 }
 function toggleMute(){
   muted = !muted;
@@ -3880,7 +4002,11 @@ if (caMute)    caMute.addEventListener('click',    () => { initAudio(); toggleMu
 if (ctlPause)  ctlPause.addEventListener('click',  () => { initAudio(); togglePause(); });
 if (ctlMute)   ctlMute.addEventListener('click',   () => { initAudio(); toggleMute(); });
 if (setFit)    setFit.addEventListener('click',    () => toggleFit());
-if (setFs)     setFs.addEventListener('click',     () => toggleFullscreen());
+if (setFs)     setFs.addEventListener('click',     () => { rotDismissed = false; toggleFullscreen(); });
+/* 竖屏闸门：「全屏并横屏」本身就是一次用户手势（浏览器只认手势），
+ * 「竖屏继续玩」关掉本次会话的提示，不再反复弹。 */
+if (rgRetry)   rgRetry.addEventListener('click',   () => { initAudio(); rotDismissed = false; enterMobileFullscreen(); });
+if (rgSkip)    rgSkip.addEventListener('click',    () => { rotDismissed = true; syncRotateGate(); });
 if (setFlash)  setFlash.addEventListener('click',  () => toggleReduceMotion());
 if (caTitle)   caTitle.addEventListener('click',   () => {
   initAudio();
@@ -4012,4 +4138,7 @@ function loop(now){
 map = buildMap();
 player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln:0, power:1});
 coopInit();
+armFirstGestureLandscape();   // 第一次触摸/点击就尝试全屏横屏（浏览器只认用户手势）
+armOrientationWatch();        // 转屏 / 进出全屏后复查，并同步闸门显隐
+syncRotateGate();             // 一进来就是竖屏的话，立刻给出指引
 requestAnimationFrame(loop);

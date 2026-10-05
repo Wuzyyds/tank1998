@@ -166,12 +166,28 @@ body:not(.idle) #play-ctl { display:flex; }
 @media (prefers-reduced-motion: reduce){
   #joy-knob { transition:none; }
 }
-/* 手机竖屏提示：点开始会自动转横屏，锁定失败时（如 iOS）据此手动转屏 */
-#rotate-hint { display:none; }
+/* ================= 手机竖屏闸门 =================
+ * 自动横屏被拦下时（iOS 不支持锁方向 / 系统关了自动旋转 / 微信无全屏 API），
+ * 必须给出明确指引，否则玩家只看到「画面是竖的、很小」却不知道该怎么办。 */
+#rotate-gate { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+  background:rgba(0,0,0,.9); z-index:70; padding:20px; }
+#rotate-gate.show { display:flex; }
+.rg-box { width:min(340px,92vw); background:#161B22; border:1px solid #30363d; border-radius:16px;
+  padding:22px 20px 18px; text-align:center; color:#c9d1d9; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+.rg-icon { font-size:42px; line-height:1; margin-bottom:8px; transform:rotate(90deg); }
+.rg-title { color:#f0c040; font-size:19px; font-weight:700; letter-spacing:2px; margin-bottom:10px; }
+.rg-desc  { font-size:13.5px; line-height:1.7; color:#9aa4b0; margin-bottom:14px; }
+.rg-btn { display:block; width:100%; font-family:inherit; font-size:15px; font-weight:600;
+  margin-top:8px; padding:13px 16px; border-radius:12px; cursor:pointer;
+  background:#21262d; color:#c9d1d9; border:1px solid #30363d; -webkit-tap-highlight-color:transparent; }
+.rg-btn.primary { background:#1f6feb; border-color:#388bfd; color:#fff; }
+.rg-btn.primary:hover { background:#388bfd; }
+/* 竖屏兜底布局：游戏区是居中的正方形，把摇杆与开火键移到画面下方的空白处 ——
+ * 原先它们是 #wrap 内的绝对定位，压在 390px 见方的画面上，几乎挡掉半张图。 */
 @media (pointer:coarse) and (orientation:portrait){
-  #rotate-hint { display:block; margin:0 12px 10px; padding:6px 12px; border-radius:8px;
-    background:rgba(31,111,235,.15); border:1px solid rgba(56,139,253,.45);
-    color:#9CC7FF; font-size:13px; text-align:center; }
+  #touchpad { position:fixed; left:0; right:0; bottom:0; top:auto; height:200px; }
+  #joystick { position:absolute; left:5vw;  bottom:26px; }
+  #pad-fire { position:absolute; right:5vw; bottom:32px; }
 }
 
 /* ================= 画面内菜单（标题 / 结束 / 过关 / 暂停） =================
