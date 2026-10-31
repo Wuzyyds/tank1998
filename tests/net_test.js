@@ -174,6 +174,21 @@ async function integration() {
       Number(iRes.headers.get('content-length')) > 0,
       JSON.stringify({ cc: ccOf(iRes), len: iRes.headers.get('content-length') }));
 
+    /* v1.6.8 gzip：首屏文本 game.js(196KB) + html + css 未压缩时手机上光传输就要一两秒。
+     * 注意 fetch 默认自带 Accept-Encoding: gzip，要测「不压缩」这条分支必须显式发 identity。 */
+    const gzJs = await fetch('http://127.0.0.1:' + PORT + '/game.js', { headers: { 'Accept-Encoding': 'gzip' } });
+    const rawJs = await fetch('http://127.0.0.1:' + PORT + '/game.js', { headers: { 'Accept-Encoding': 'identity' } });
+    const gzLen = Number(gzJs.headers.get('content-length'));
+    const rawLen = Number(rawJs.headers.get('content-length'));
+    const gzPng = await fetch('http://127.0.0.1:' + PORT + '/assets/icons/icon-192.png', { headers: { 'Accept-Encoding': 'gzip' } });
+    assert('gzip：文本走压缩（体积 <60%）且声明 Vary: Accept-Encoding',
+      gzJs.headers.get('content-encoding') === 'gzip' && gzLen > 0 && gzLen < rawLen * 0.6 &&
+      (gzJs.headers.get('vary') || '').toLowerCase().indexOf('accept-encoding') >= 0,
+      JSON.stringify({ gz: gzLen, raw: rawLen }));
+    assert('gzip：不带 Accept-Encoding 时不压缩；图片等已压缩格式永不压',
+      !rawJs.headers.get('content-encoding') && rawLen > gzLen && !gzPng.headers.get('content-encoding'),
+      JSON.stringify({ raw: rawJs.headers.get('content-encoding'), png: gzPng.headers.get('content-encoding') }));
+
     const headRes = await fetch('http://127.0.0.1:' + PORT + '/', { method: 'HEAD' });
     const headBody = await headRes.text();
     assert('HEAD / 返回 200 + Content-Length 且无响应体',
@@ -185,8 +200,9 @@ async function integration() {
       postRes.status === 405 && /\bGET\b/.test(postRes.headers.get('allow') || ''),
       postRes.status + ' allow=' + postRes.headers.get('allow'));
 
+    const pingRes = await rawPingCheck();
     assert('服务端定期发送 WebSocket ping 保活帧（防反代/NAT 掐空闲连接）',
-      (await rawPingCheck()) === true);
+      pingRes === true, 'rawPingCheck=' + JSON.stringify(pingRes));
 
     // Origin 白名单：单独起一个设了 ALLOW_ORIGIN 的实例
     const PORT2 = PORT + 1;
@@ -350,10 +366,22 @@ function staticChecks() {
 
   const predOk =
     gjSrc.indexOf('function predictGuestPlayer2(dt){') >= 0 &&
-    gjSrc.indexOf('    else predictGuestPlayer2(dt);') >= 0 &&
+    gjSrc.indexOf('      predictGuestPlayer2(dt);') >= 0 &&
     gjSrc.indexOf('const PRED_TOL = ') >= 0;
   assert('客方本地预测已接入（画面立刻响应），且带容差对账（防跑飞 / 防抖动）', predOk,
     predOk ? '' : '未找到 predictGuestPlayer2 的定义或调用');
+
+  /* ---- v1.6.5：房主坦克的渲染插值（客方看队友「一顿一顿」的根治）----
+   * 快照 30Hz、渲染 60Hz，直接套用就是每两帧动一次；必须只平滑渲染坐标 rpx/rpy，
+   * 权威 px/py 不能动（否则碰撞 / 命中 / 对账全乱）。 */
+  const smoothOk =
+    gjSrc.indexOf('function smoothRemoteTank(t, dt){') >= 0 &&
+    gjSrc.indexOf('      smoothRemoteTank(player, dt);') >= 0 &&
+    gjSrc.indexOf('const REMOTE_SMOOTH = ') >= 0 &&
+    gjSrc.indexOf('player.rpx = prevR.x') >= 0 &&
+    gjSrc.indexOf('const cx = Math.round(t.rpx !== undefined ? t.rpx : t.px);') >= 0;
+  assert('客方对房主坦克做渲染插值（30Hz 快照 → 60Hz 平滑），且不动权威 px/py', smoothOk,
+    smoothOk ? '' : '缺少 smoothRemoteTank / rpx 渲染路径');
 
   /* ---- v1.6.2：客方开火本地预测 / 涡轮加速 的防回退锁 ---- */
   const firePredOk =
@@ -403,6 +431,86 @@ function staticChecks() {
     gjSrc.indexOf("else if (t.kind === 'fast' && t.speed > 0) m *= (t.speed + FAST_SPEED_ADD) / t.speed;") >= 0 &&
     gjSrc.indexOf("const spdFast = !isP && tank.kind === 'fast';") >= 0,
     '涡轮加速参数被改动，或快速兵专属分支缺失');
+
+  /* v1.6.6 单人容错防回退锁（B 档）。这组数是「单人过不去」的诊断结论，
+   * 不是随手调的手感值，被顺手改回去会立刻退回「跑不掉 + 一失误清零」：
+   *   ① 玩家 2.6 → 2.85、快速兵 3.4 → 3.05（相对 1.31× → 1.07×）；
+   *   ② 预备命数 2 → 3、复活无敌 2 → 2.5 秒；
+   *   ③ 续关点 = 死亡所在难度档的第 1 关（一局 25 关、中途无存档）。
+   * 注意三者都必须走常量，散落字面量会让测试与实现悄悄漂移。 */
+  assert('单人容错参数锁：玩家 2.85 / 快速兵 3.05 / 命数 3 / 复活无敌 2.5',
+    gjSrc.indexOf('const PLAYER_SPEED    = 2.85;') >= 0 &&
+    gjSrc.indexOf('const RESPAWN_INVULN  = 2.5;') >= 0 &&
+    gjSrc.indexOf('const START_LIVES     = 3;') >= 0 &&
+    gjSrc.indexOf('{ speed:3.05, hp:1, score:200, fire:2.8,') >= 0 &&
+    gjSrc.indexOf('{speed:PLAYER_SPEED, hp:playerMaxHp(), fire:0.4}') >= 0 &&
+    gjSrc.indexOf('{invuln:RESPAWN_INVULN, power: 1}') >= 0 &&
+    gjSrc.indexOf('{invuln: RESPAWN_INVULN, power: carryPower}') >= 0,
+    '单人容错常量被改动，或有调用点没走常量');
+
+  assert('档位续关锁：gameOver 记续关点 / startGame 仅在从结束画面重开时续关',
+    gjSrc.indexOf('checkpointLevel = diffStartLevel(curDiff());') >= 0 &&
+    gjSrc.indexOf('const fromOver = (state === \'over\');') >= 0 &&
+    gjSrc.indexOf('if (fromOver && checkpointLevel > 0){') >= 0 &&
+    gjSrc.indexOf('level = checkpointLevel;') >= 0 &&
+    /* v1.6.9 起「重开会到第几关」由按钮文案承载（画面里那行小字已去掉） */
+    gjSrc.indexOf("('↻ 重新开始（第 ' + lv + ' 关）')") >= 0,
+    '续关逻辑被删改，或按钮没写明重开会回到第几关');
+
+  /* v1.6.9 「继续本关」防回退锁：原地重开同一关、保留分数、消耗次数（单人 5 / 双人 8），
+   * 联机时次数由房主算、通过快照 cg 同步给客方。这四个环节缺一，联机就会出
+   * 「客方看得见按钮但点了没反应」或「两边剩余次数不一样」。 */
+  assert('继续本关锁：单人 5 / 双人 8 / 原地重开 / 消耗次数 / 客方跟快照',
+    gjSrc.indexOf('const CONTINUE_LIMIT_SOLO = 5;') >= 0 &&
+    gjSrc.indexOf('const CONTINUE_LIMIT_COOP = 8;') >= 0 &&
+    gjSrc.indexOf('function continueLevel(){') >= 0 &&
+    gjSrc.indexOf('function requestContinue(){') >= 0 &&
+    gjSrc.indexOf('  continuesLeft--;') >= 0 &&
+    gjSrc.indexOf('  startLevel(true);                       // level 不动 → 还是这一关；开局火力回到 1 级') >= 0 &&
+    gjSrc.indexOf("Net.send({ type:'start', act: 'continue' });") >= 0 &&
+    gjSrc.indexOf("else if (msg.act === 'continue') continueLevel();") >= 0 &&
+    gjSrc.indexOf('cg: continuesLeft,') >= 0 &&
+    gjSrc.indexOf("if (typeof s.cg === 'number') continuesLeft = s.cg;") >= 0,
+    '继续本关的次数 / 联机同步被删改');
+
+  assert('继续本关按钮：次数用完要隐藏，并把「重新开始」重新点亮为主按钮',
+    gjSrc.indexOf('const canContinue = (state === \'over\' && !paused && continuesLeft > 0);') >= 0 &&
+    gjSrc.indexOf('caShow(caContinue, canContinue);') >= 0 &&
+    gjSrc.indexOf("caRestart.classList.toggle('primary', !canContinue);") >= 0 &&
+    (fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').indexOf('id="ca-continue"') >= 0),
+    '按钮显隐/主次切换被删改，或 HTML 里没有 ca-continue');
+
+  /* v1.6.7 联机延迟防回退锁。这三处一起决定「同一台电脑上两人对局看到的延迟」：
+   * ① 网络节拍必须跟**真实**流逝走（逻辑 dt 被钳在 50ms，用它发包会让 20fps 机器
+   *    的发包间隔变 50ms）；② 累加器要减一拍保留余数，不能清零；
+   * ③ 客方自己那台坦克超出容差时只许「渲染滑行」，不许瞬移（否则 ADAD 后位置会跳）。 */
+  assert('v1.6.7 联机节拍锁：真实流逝驱动发包 + 保留余数 + 客方纠正只滑不跳',
+    gjSrc.indexOf('const rawDt = Math.max(0, (now - last) / 1000);') >= 0 &&
+    gjSrc.indexOf('netSendAcc = Math.min(netSendAcc + Math.min(rawDt, 0.25), NET_TICK * 2);') >= 0 &&
+    gjSrc.indexOf('      netSendAcc -= NET_TICK;') >= 0 &&
+    gjSrc.indexOf('function pushRtt(v){') >= 0 &&
+    gjSrc.indexOf('const PRED_SNAP = TILE * 3;') >= 0 &&
+    gjSrc.indexOf('np2.rpx = player2.px; np2.rpy = player2.py;') >= 0 &&
+    gjSrc.indexOf('smoothRemoteTank(player2, dt);') >= 0,
+    'v1.6.7 的节拍 / RTT 取窗口最小 / 客方滑行纠正被回退了');
+
+  /* v1.6.8 启动性能锁：assets/sounds.js 是 13 个 wav 的 base64 兜底包（约 190KB，gzip 后仍 133KB），
+   * 只在「.wav 取不到」时才需要。三处都不能再无条件加载，否则按需加载立刻失效。 */
+  const htmlSrc = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const swSrc = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  assert('v1.6.8 启动锁：sounds.js 只在失败时按需加载（HTML 无 script / SW 预缓存无此项 / 有加载器）',
+    htmlSrc.indexOf('assets/sounds.js') < 0 &&
+    swSrc.indexOf("./assets/sounds.js") < 0 &&
+    gjSrc.indexOf('function ensureSndData(){') >= 0 &&
+    gjSrc.indexOf("s.src = 'assets/sounds.js';") >= 0,
+    'sounds.js 又被无条件加载了（每次进页面白下 190KB）');
+
+  assert('v1.6.8 启动锁：服务端 gzip 齐备（文本压缩 + Vary + 按 mtime 缓存）',
+    svSrc.indexOf("const zlib = require('zlib');") >= 0 &&
+    svSrc.indexOf('function gzipFor(filePath, buf){') >= 0 &&
+    svSrc.indexOf("if (canGz) headers['Vary'] = 'Accept-Encoding';") >= 0 &&
+    svSrc.indexOf("if (gz) headers['Content-Encoding'] = 'gzip';") >= 0,
+    '服务端 gzip 被移除或写残');
 
   /* v1.6.4 手机横屏防回退锁：① 第一次触摸/点击就尝试（不能只剩「开始游戏」一个入口）；
    * ② 全屏真正生效后再补锁一次；③ 锁方向有 landscape-primary → landscape 退路；
@@ -532,7 +640,7 @@ function unit() {
   // 快照往返：player2 与 lives2 保留
   const round = vm.runInContext("(function(){ var s = serializeSnapshot(); var before = {p2: !!s.p2, lives2: s.lives2}; applySnapshot(s); return {before: before, after: {p2: !!player2, lives2: lives2}}; })()", context);
   assert('快照含 player2 且 applySnapshot 还原 player2', round.before.p2 && round.after.p2, JSON.stringify(round));
-  assert('快照往返保留 lives2', round.before.lives2 === 2 && round.after.lives2 === 2, JSON.stringify(round));
+  assert('快照往返保留 lives2（v1.6.6 起预备命数为 3）', round.before.lives2 === 3 && round.after.lives2 === 3, JSON.stringify(round));
 
   // 武器/火力挂在各自坦克上，快照逐坦克携带 → 联机下玩家2 的状态同样独立（不共享）
   const wRound = vm.runInContext(`(function(){
@@ -609,16 +717,16 @@ function unit() {
   // 重开一局必须重置火力等级（基地被摧毁 / 生命耗尽后重开，不能带着上一局的火力）
   const fresh = vm.runInContext("(function(){ netMode='off'; player2=null; player.power=3; level=5; lives=1; startGame(); return {pow: player.power, lvl: level, lives: lives}; })()", context);
   assert('重开一局：火力等级回到 1 级（不再继承上局）', fresh.pow === 1, JSON.stringify(fresh));
-  assert('重开一局：关卡回到 01 且命数重置为 2', fresh.lvl === 1 && fresh.lives === 2, JSON.stringify(fresh));
+  assert('重开一局：关卡回到 01 且命数重置为 3（v1.6.6 容错）', fresh.lvl === 1 && fresh.lives === 3, JSON.stringify(fresh));
 
   // 完整复现用户报的场景：打到第 2 关（火力 Lv3）基地被摧毁 → GAME OVER → 点按重开
   const replay = vm.runInContext("(function(){ netMode='off'; player2=null; startGame(); level=2; player.power=3; player.gun='laser'; player.ammo=5; destroyBase(); var st1 = state; gameTime += 2; requestStart(); return { st1: st1, st2: state, pow: player.power, lvl: level, gun: player.gun, ammo: player.ammo }; })()", context);
   assert('基地被摧毁 → 点按重开：状态恢复 playing 且火力回到 Lv1', replay.st1 === 'over' && replay.st2 === 'playing' && replay.pow === 1, JSON.stringify(replay));
   assert('基地被摧毁 → 点按重开：关卡回到 01、武器清空为普通弹', replay.lvl === 1 && replay.gun === 'normal' && replay.ammo === 0, JSON.stringify(replay));
 
-  // 武器字母标识：7 种武器全覆盖且互不重复
+  // 武器字母标识：8 种武器全覆盖且互不重复（v1.7.0 新增冲锋枪 M）
   const wl = vm.runInContext("(function(){ var miss = WEAPON_TYPES.filter(function(t){ return !WEAPON_LETTER[t]; }); var seen = {}, dup = []; WEAPON_TYPES.forEach(function(t){ var L = WEAPON_LETTER[t]; if (seen[L]) dup.push(L); seen[L] = 1; }); return {total: WEAPON_TYPES.length, miss: miss, dup: dup, ls: WEAPON_LETTER.laser + WEAPON_LETTER.spread}; })()", context);
-  assert('武器字母：7 种武器均有字母标识', wl.total === 7 && wl.miss.length === 0, JSON.stringify(wl));
+  assert('武器字母：8 种武器均有字母标识', wl.total === 8 && wl.miss.length === 0, JSON.stringify(wl));
   assert('武器字母：字母唯一（激光=L 散弹=S）', wl.dup.length === 0 && wl.ls === 'LS', JSON.stringify(wl));
 
   // 地图上的武器道具绘制字母（而非 20x20 矢量小图标）
@@ -630,7 +738,7 @@ function unit() {
   // 再留一行「点下面按钮」的说明只会与按钮抢位置（手机屏幕本来就矮）。
   const ovl = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText; function cap(fn){ var rec = []; c.fillText = function(t,x,y){ rec.push({ t:String(t), y:y }); }; fn(); c.fillText = orig; return rec; } return { over: cap(drawOver), title: cap(drawTitle), clear: cap(drawClear) }; })()", context);
   const gapsOk = (arr, min) => arr.length >= min && arr.every((r, i) => i === 0 || (r.y - arr[i-1].y) >= 20);
-  assert('GAME OVER 排版：3 行递增且行距充足（得分不被提示覆盖）', ovl.over.length === 3 && gapsOk(ovl.over, 3), JSON.stringify(ovl.over));
+  assert('GAME OVER 排版：3 行递增且行距充足（续关信息已挪到按钮文案上）', ovl.over.length === 3 && gapsOk(ovl.over, 3), JSON.stringify(ovl.over));
   assert('标题（4 行）/ 过关（3~4 行：完成 / 得分 / 倒计时）排版：行距充足，且已无「点击下方按钮」文字',
     gapsOk(ovl.title, 4) && gapsOk(ovl.clear, 2) &&
     !ovl.over.concat(ovl.title, ovl.clear).some(r => /点击下方按钮|按 Enter/.test(r.t)),
@@ -708,8 +816,14 @@ function unit() {
   assert('快照增量：破坏超过 200 格时退回全量地图', ovf.full === true, JSON.stringify(ovf));
 
   // 延迟测量：客方回带 ack，在最近若干帧的发送时刻里反查（ack 常晚于最新帧到达）
-  const rtt = vm.runInContext("(function(){ netMode = 'host'; var t0 = performance.now(); snapPing = [[5, t0 - 200], [6, t0 - 120], [7, t0 - 80]]; coopHandleMsg({ type:'input', k:0, ack:7 }); var a = coopRtt; coopHandleMsg({ type:'input', k:0, ack:6 }); var b = coopRtt; coopHandleMsg({ type:'input', k:0, ack:999 }); return { newest: a, older: b, unknownKeeps: coopRtt, keep: SNAP_PING_KEEP }; })()", context);
-  assert('延迟测量：按 ack 反查发送时刻（80 / 120ms），未知 seq 不覆盖', rtt.newest === 80 && rtt.older === 120 && rtt.unknownKeeps === 120, JSON.stringify(rtt));
+  // v1.6.7 起 HUD 显示的是「窗口内最小值」而非最近一次样本 —— 单次卡顿不该把数字顶住不动。
+  // 因此这里分开校验：① 反查确实命中了对应 seq 的发送时刻（看窗口末位原始样本）
+  //                   ② 显示值取的是窗口最小
+  const rtt = vm.runInContext("(function(){ netMode = 'host'; var t0 = performance.now(); snapPing = [[5, t0 - 200], [6, t0 - 120], [7, t0 - 80]]; rttWin.length = 0; coopRtt = 0; coopHandleMsg({ type:'input', k:0, ack:7 }); var a = coopRtt; coopHandleMsg({ type:'input', k:0, ack:6 }); var raw = Math.round(rttWin[rttWin.length - 1]); var b = coopRtt; coopHandleMsg({ type:'input', k:0, ack:999 }); return { newest: a, olderRaw: raw, olderShown: b, unknownKeeps: rttWin.length, keep: SNAP_PING_KEEP, win: RTT_WIN }; })()", context);
+  assert('延迟测量：按 ack 反查发送时刻（最新 80ms / 更早 120ms 命中正确），未知 seq 不污染窗口',
+    rtt.newest === 80 && rtt.olderRaw === 120 && rtt.unknownKeeps === 2, JSON.stringify(rtt));
+  assert('延迟测量：HUD 取窗口最小值（更早的大样本不会把显示顶上去）',
+    rtt.olderShown === 80 && rtt.win === 16, JSON.stringify(rtt));
   assert('延迟测量：发送时刻环形缓冲有上限（16 帧 ≈ 0.8 秒窗口）', rtt.keep === 16, JSON.stringify(rtt));
 
   // 高关卡冒烟：BOSS 关 / 精英关连续跑帧（含地形缓存、字母道具、BOSS 血条、幕布标签）

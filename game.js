@@ -35,8 +35,8 @@ const SPEED_MUL_P     = 1.50;
 
 /* ---- 敌人侧平衡（避免敌军拾取道具后关卡崩坏） ---- */
 const ENEMY_SHIELD_TIME   = 6;    // 敌人吃护盾：6 秒（玩家 12 秒）
-const ENEMY_FREEZE_TIME   = 4;    // 敌人吃时钟：冻玩家 4 秒（玩家冻敌 10 秒）
-const ENEMY_AMPHIBIOUS_TIME = 20; // 敌人吃两栖：20 秒
+const ENEMY_FREEZE_TIME   = 5;    // 敌人吃时钟：冻玩家 5 秒（玩家冻敌 10 秒）
+const ENEMY_AMPHIBIOUS_TIME = 40; // 敌人吃两栖：40 秒
 const ENEMY_SPEED_TIME    = 12;   // 敌人吃加速：12 秒（玩家 30 秒）
 const ENEMY_SPEED_MUL     = 1.30; // 敌人加速倍率（低于玩家：否则永远追不上、也逃不掉）
 /* 快速兵（速度兵）单独一套：走**绝对加成**而不是倍率。
@@ -46,11 +46,19 @@ const ENEMY_SPEED_MUL     = 1.30; // 敌人加速倍率（低于玩家：否则�
 const FAST_SPEED_TIME     = 15;   // 快速兵吃加速：15 秒（其它敌人 12 秒）
 const FAST_SPEED_ADD      = 0.75; // 快速兵加速量：+0.75 格/秒（绝对加成，不乘倍率）
 const ENEMY_MAX_POWER     = 2;    // 敌人火力封顶 2 级（3 级会蒸干水塘，拆掉地图结构）
-const ENEMY_ITEM_GREED    = 0.35; // hunter 型敌人主动抢道具的概率（0 = 只在路过时吃到）
+/* 敌人抢道具（v1.7.0 改）：**所有敌人**都会抢，不再只有 hunter、也不掷概率 ——
+ * 玩家原话「离 3.5 格就直接去拿，类似具有人的特性」。范围从 5 格收到 3.5 格，
+ * 免得半张图的敌人都被一个道具牵走，变成排队送死。 */
+const ENEMY_ITEM_RANGE    = 3.5;  // 抢道具的触发距离（曼哈顿格数）
 
-/* ---- 手雷（敌人拾取）：范围爆炸 + 提前警示 ---- */
-const GRENADE_FUSE   = 1.0;   // 引信：1 秒，期间画红色警示圈
+/* ---- 手雷（敌人拾取）：范围爆炸（v1.7.0 起不再画预警圈） ----
+ * 引信仍保留 1 秒：给「敌人踩上去 → 爆炸」一个过渡，否则看起来像凭空炸。 */
+const GRENADE_FUSE   = 1.0;   // 引信 1 秒（无预警，见 drawGrenadeWarn）
 const GRENADE_RADIUS = 3;     // 爆炸半径（格）
+
+/* ---- 新增：「钢板」道具把基地外围的砖换成钢，25 秒后变回砖 ---- */
+const FORTIFY_TIME       = 25;  // 钢化持续秒数
+const BASE_REVIVE_DELAY  = 3;   // 基地「复活甲」触发后多久修好（秒）
 
 /* ---- 状态效果（燃烧 / 减速 / 过热） ---- */
 const BURN_TICK   = 0.4;   // 燃烧每 0.4 秒结算一次
@@ -59,7 +67,12 @@ const BURN_GEN    = 2;     // 燃烧致死最多传染 2 代
 const SLOW_TIME_E = 3.0, SLOW_MUL_E = 0.50, SLOW_FIRE_E = 1.6;  // 对敌：移速 x0.5、射击间隔 x1.6
 const SLOW_TIME_P = 2.5, SLOW_MUL_P = 0.60;                     // 对玩家：仅移速 x0.6，不锁射击
 const OVERHEAT_TIME = 1.5; // 玩家被点燃：枪管过热 1.5 秒无法射击（不直接致死）
-const CLASH_CD    = 0.4;   // 子弹吞噬冷却：一次交火最多被削一级
+/* 子弹对撞规则（v1.6.10 改）：
+ *   同级 → 同归于尽（这是玩家用子弹挡子弹的基础）
+ *   不同级 → 低弹直接消失，**高弹毫发无损**
+ * 原规则是「强弹等级 = |高-低|」，于是 1 级弹能把 2 级弹打成 1 级 ——
+ * 玩家体感就是「我一颗最弱的弹就把敌人的强弹抵消了」，完全反直觉。
+ * 顺带删掉 clashCd（原用来「一次交火最多削一级」），现在不再降级，这个冷却没意义了。 */
 
 /* ---- 玩家血量：恒定 1 血（一击必死，原版手感） ----
  * v1.6.0 起移除「经典 1 血 / 标准 2 血 / 宽容 3 血」的可选档位：
@@ -68,9 +81,32 @@ const CLASH_CD    = 0.4;   // 子弹吞噬冷却：一次交火最多被削一�
 const PLAYER_HP = 1;
 function playerMaxHp(){ return PLAYER_HP; }
 
+/* ---- v1.6.6 单人容错：只修「跑不掉」这一侧 ----
+ * 单人「过不去」的两个不公平点都是能算出来的，不是感觉：
+ *   ① 跑不掉：玩家原速 2.6 格/秒，fast 兵 3.4（新兵档第 1 关就占 20%），
+ *      噩梦档 x1.32 后到 4.49 —— 追不上也逃不掉，只能对射，而 1 血对射必输。
+ *   ② 躲不开：命中判定是 |dx|<11 且 |dy|<11，玩家要脱离需移 11px = 0.212s，
+ *      而敌弹 240px/s 在 2 格(40px) 只需 0.167s —— 近距离同轴在物理上就无法躲。
+ * 这里【只修 ①】：给玩家提速、把快速兵压到只比玩家快一点点。
+ * ② 的命中几何不动 —— 那是原版手感，动了整个游戏会变成另一个游戏。
+ * 复活无敌 2 → 2.5 秒：死亡已经同时扣命 + 把火力打回 1 级，再叠加「刚复活就被秒」
+ * 就是连死雪崩，2.5 秒足够退回出生点并看清局面。 */
+const PLAYER_SPEED    = 2.85;   // 格/秒（原 2.6 = 52px/s，现 57px/s）
+const RESPAWN_INVULN  = 2.5;    // 复活 / 开局无敌秒数（原 2）
+const START_LIVES     = 3;      // 预备命数（合计 START_LIVES + 1 条，原 2 → 共 3 条）
+const MAX_LIVES       = 8;      // 命数上限（「坦克」道具与得分奖命都卡这个数；原 6）
+/* ---- 续关次数 ----
+ * 死掉之后可以「从这一关原地重来」，**保留当前关卡与分数**，但计入次数；用完就只能重新开始。
+ * 注意它和 checkpointLevel（档位续关）是两套东西：
+ *   档位续关 = 点「重新开始」时退回到死亡所在难度档的第 1 关，不消耗次数、分数清零；
+ *   续关     = 点「继续本关」时原地重开同一关，消耗 1 次、分数保留。
+ * 单人给 5 次、双人给 8 次（两个人分担，但死得更频繁，所以多给）。 */
+const CONTINUE_LIMIT_SOLO = 5;
+const CONTINUE_LIMIT_COOP = 8;
+
 const ETYPES = {
   basic: { speed:1.6, hp:1, score:100, fire:2.4, body:'#C8CCD2', dark:'#6B7178' },
-  fast:  { speed:3.4, hp:1, score:200, fire:2.8, body:'#7FD0FF', dark:'#2E7BB0' },
+  fast:  { speed:3.05, hp:1, score:200, fire:2.8, body:'#7FD0FF', dark:'#2E7BB0' },
   power: { speed:2.1, hp:2, score:300, fire:1.3, body:'#FF8A6B', dark:'#B03E20' },
   armor: { speed:1.2, hp:4, score:400, fire:3.2, body:'#F0F0F0', dark:'#A8A8A8' },
   bonus: { speed:2.2, hp:1, score:500, fire:1.8, body:'#FF3B30', dark:'#8E1B14' }, // 红色道具敌人
@@ -128,8 +164,8 @@ function setDiffStart(d){
 }
 const ELITE_TYPES = ['armor', 'power'];
 const ELITE_COUNT = 3;
-const ITEM_TYPES = ['star','grenade','shield','clock','tank','amphibious','eagle','speed'];
-const ITEM_WEIGHT = [26, 12, 18, 14, 10, 20, 8, 14];   // 两表必须等长（rollItemType 按下标加权）
+const ITEM_TYPES = ['star','grenade','shield','clock','tank','amphibious','eagle','speed','fortify'];
+const ITEM_WEIGHT = [24, 12, 16, 13, 10, 17, 8, 14, 12];   // 两表必须等长（rollItemType 按下标加权）
 const GUN_NAMES = ['普通弹', '穿甲弹', '毁灭弹'];
 const GUN_COLORS = ['#FFD23F', '#FF8A00', '#FF3B30'];
 
@@ -144,21 +180,28 @@ const GUNS = {
   flame:  { name:'火焰枪', color:'#FF6A00', ammo:15, speedK:0.90, pierce:0, brickPierce:0, burn:1, slow:0, homing:0, chain:0, spread:0 },
   frost:  { name:'冷冻枪', color:'#7FD0FF', ammo:12, speedK:1.10, pierce:0, brickPierce:0, burn:0, slow:1, homing:0, chain:0, spread:0 },
   laser:  { name:'激光枪', color:'#B14BFF', ammo:10, speedK:1.60, pierce:3, brickPierce:2, burn:0, slow:0, homing:0, chain:0, spread:0 },
-  spread: { name:'散弹枪', color:'#FFD23F', ammo:12, speedK:1.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:0, spread:3 },
+  spread: { name:'散弹枪', color:'#FFD23F', ammo:12, speedK:1.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:0, spread:5 },
   homing: { name:'追踪弹', color:'#46B455', ammo:8,  speedK:0.85, pierce:0, brickPierce:0, burn:0, slow:0, homing:1, chain:0, spread:0 },
   tesla:  { name:'电磁链', color:'#4FD1E0', ammo:10, speedK:1.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:3, spread:0 },
   drill:  { name:'穿甲钻', color:'#C7CDD4', ammo:10, speedK:1.15, pierce:3, brickPierce:4, burn:0, slow:0, homing:0, chain:0, spread:0 },
+  /* 冲锋枪：走「高射速 + 低伤害」。dmg 0.5 表示对 1 血敌人要两枪，
+   * fireK 0.5 把射击间隔从 0.4s 压到 0.2s。对玩家恒 1 血伤害（见 applyHit）。 */
+  smg:    { name:'冲锋枪', color:'#B8E986', ammo:20, speedK:2.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:0, spread:0, dmg:0.5, fireK:0.5 },
 };
-const WEAPON_TYPES  = ['flame','frost','laser','spread','homing','tesla','drill'];
-const WEAPON_WEIGHT = [22, 20, 14, 16, 10, 10, 8];   // 总 100
+const WEAPON_TYPES  = ['flame','frost','laser','spread','homing','tesla','drill','smg'];
+const WEAPON_WEIGHT = [18, 17, 12, 14, 8, 9, 7, 15];   // 总 100（8 种）
 const WEAPON_RING = { flame:'#FF6A00', frost:'#7FD0FF', laser:'#B14BFF',
-                      spread:'#FFD23F', homing:'#46B455', tesla:'#4FD1E0', drill:'#C7CDD4' };
+                      spread:'#FFD23F', homing:'#46B455', tesla:'#4FD1E0', drill:'#C7CDD4',
+                      smg:'#B8E986' };
 /* 武器道具的字母标识：地图上的武器格子直接显示字母，比矢量小图标更快辨认
  * F火焰枪 C冷冻枪 L激光枪 S散弹枪 H追踪弹 T电磁链 D穿甲钻 */
-const WEAPON_LETTER = { flame:'F', frost:'C', laser:'L', spread:'S', homing:'H', tesla:'T', drill:'D' };
+const WEAPON_LETTER = { flame:'F', frost:'C', laser:'L', spread:'S', homing:'H', tesla:'T', drill:'D', smg:'M' };
 const CLASSIC_POOL_RATE = 0.5;   // 经典道具池占比（武器占 50%，保证玩家能频繁见到武器）
 const WEAPON_UNLOCK_LEVEL = 1;   // 所有关卡均可能掉落武器（不再限制第 2 关起）
-const ENEMY_NO_GUN = { homing: 1 };  // 追踪 + 一击必死过于劝退，敌军无法使用
+/* 追踪弹敌军禁用（追踪 + 一击必死过于劝退）。
+ * 冲锋枪也禁：它伤害 0.5，打到只有 1 血的玩家身上会变成「挨两枪才死」，
+ * 等于白送一条命 —— 这个低伤害只该对敌人成立。 */
+const ENEMY_NO_GUN = { homing: 1, smg: 1 };
 
 function gunDef(t){ return GUNS[(t && t.gun) || 'normal'] || GUNS.normal; }
 
@@ -469,8 +512,35 @@ function initAudioAssets(){
       }))
       .then(buf => { SND[key] = buf; })
       /* 文件取不到（服务器不提供 .wav / file:// / 404）→ 用内嵌 dataURI 解码 */
-      .catch(() => decodeDataUri(key).then(buf => { SND[key] = buf; }).catch(() => { SND[key] = null; }));
+      /* 文件取不到（服务器不提供 .wav / file:// / 404）→ 现拉内嵌 dataURI 再解码 */
+      .catch(() => ensureSndData()
+        .then(() => decodeDataUri(key))
+        .then(buf => { SND[key] = buf; })
+        .catch(() => { SND[key] = null; }));
   }
+}
+/* ---- 内嵌 base64 兜底包的按需加载 ----
+ * assets/sounds.js 是 13 个 wav 的 base64（约 190KB），原本用 <script defer> 无条件加载：
+ * 只要静态服务器正常提供 .wav，这份数据一次都用不上，却每次进页面都白下载 190KB、
+ * 白解析一遍（base64 压缩率还只有 68%，gzip 后仍有 133KB，是首屏最大的一块）。
+ * 现在改成「wav 取不到时才注入脚本」；无 AudioContext 的老环境在 initAudio() 里提前拉，
+ * 保持原来的兜底行为不变。 */
+let sndDataReady = false, sndDataLoading = null;
+function ensureSndData(){
+  if (sndDataReady) return Promise.resolve();
+  if (sndDataLoading) return sndDataLoading;
+  sndDataLoading = new Promise((res) => {
+    if (window.TANK_SND){ sndDataReady = true; res(); return; }
+    try {
+      const s = document.createElement('script');
+      s.src = 'assets/sounds.js';
+      s.async = true;
+      s.onload = () => { sndDataReady = true; res(); };
+      s.onerror = () => { sndDataReady = true; res(); };   // 拉不到就算了：playSnd 还有合成 beep 兜底
+      document.head.appendChild(s);
+    } catch(e) { sndDataReady = true; res(); }
+  });
+  return sndDataLoading;
 }
 /* 把内嵌的 base64 dataURI 解成 AudioBuffer */
 function decodeDataUri(key){
@@ -793,6 +863,8 @@ function initAudio(){
   if (!actx){
     try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
     initAudioAssets();   // AudioContext 就绪后预取 wav 素材
+    /* 没有 WebAudio 时只能走 <audio> + dataURI 兜底，此时必须有那份内嵌数据 */
+    if (!actx) ensureSndData();
     audioBusInit();      // 建好音量总线（之后所有音源都接到总线上）
     /* iOS/Chrome 自动播放策略：手势内播一个静音 buffer 解锁输出 */
     if (actx){
@@ -874,7 +946,13 @@ for (const k in sfxRaw){
 
 /* ================= 游戏状态 ================= */
 let state = 'title';        // title | playing | clear | over
-let level = 1, score = 0, hiScore = 0, lives = 2;
+let level = 1, score = 0, hiScore = 0, lives = START_LIVES;
+let checkpointLevel = 0;   // 续关点：死亡所在难度档的第 1 关（0 = 无）
+let continuesLeft = 0;     // 本局剩余「继续本关」次数（客方由快照 cg 同步）
+let baseRevive = 0;        // 基地复活甲剩余次数（「老鹰」道具给 1 次）
+let baseReviveT = 0;       // 复活倒计时（>0 表示基地正在修复中）
+let fortifyT = 0;          // 基地钢板剩余秒数
+let fortifyCells = [];     // 被钢化的格子，恢复时逐个换回砖
 let nextExtraLifeScore = 2000;   // 每 2000 分奖一命
 let player = null, enemies = [], bullets = [], items = [], explosions = [];
 /* 客方本地曳光弹（纯画面，权威仍在房主）。与 bullets 分开存放：
@@ -895,7 +973,7 @@ let keys = {};
 /* ---- 双人合作状态（netMode==='off' 时全部不生效，单人路径零影响） ---- */
 let keys2 = {};             // 玩家2 的输入：房主侧由客方上报写入，驱动 player2
 let player2 = null;         // 玩家2 坦克
-let lives2 = 2;             // 玩家2 独立命数
+let lives2 = START_LIVES;   // 玩家2 独立命数
 let netMode = 'off';        // 'off' | 'host' | 'guest'
 let netSendAcc = 0;         // 网络发包节流累加器
 let pauseBeat  = 0;         // 暂停心跳累加器：暂停期间不发快照，改用 4Hz 轻量心跳维持状态同步
@@ -948,7 +1026,7 @@ let __tankId = 1;
 function makeTank(x, y, dir, kind, opts){
   opts = opts || {};
   const isP = kind === 'player';
-  const def = isP ? {speed:2.6, hp:playerMaxHp(), fire:0.4} : ETYPES[kind];
+  const def = isP ? {speed:PLAYER_SPEED, hp:playerMaxHp(), fire:0.4} : ETYPES[kind];
   const spd = def.speed * (isP ? 1 : enemySpeedMul());
   // 档位加血：每档整体 +0/+1/+2（红色道具敌人与首领不吃这档加成）
   const hpBonus = (!isP && kind !== 'bonus' && kind !== 'boss') ? tier().hp : 0;
@@ -1012,11 +1090,28 @@ function updateTankMove(t, dt){
   }
   // 减速只作用于实际位移，不改 t.speed 本身（t.speed 已被关卡系数一次性缩放，反复乘会漂移）
   const sp = t.speed * TILE * tileSpeedMul(t) * statusSpeedMul(t);
-  // 方向改变时，先把坦克对齐到最近格心，再按新方向起步，避免斜向漂移/穿墙
+  /* 方向改变时的对齐处理：
+   * ① 反向（左↔右 / 上↔下）：交换起点与终点，沿原路平滑退回。
+   *    原实现这里一律 snapToGrid，会把坦克瞬移回格心 —— 快速 A↔D 换向时，
+   *    每次换向都「走几像素 → 被拽回格心」，坦克几乎不前进、只在格心附近抽搐，
+   *    这是「来回摇摆手感不顺」的根因。反向不需要换轴（本来就在同一根轴上），
+   *    所以也不需要对到格心。
+   * ② 垂直转向（横↔竖）：必须回到格心才能换轴，保留 snapToGrid（否则斜向漂移/穿墙）。 */
   if (t.movingTo){
     const d = DIRS[t.dir];
-    const wantX = t.x + d.dx, wantY = t.y + d.dy;
-    if (t.movingTo.x !== wantX || t.movingTo.y !== wantY){
+    const mx = t.movingTo.x - t.x, my = t.movingTo.y - t.y;
+    if (mx === -d.dx && my === -d.dy){
+      /* 反向：原出发格就是「退回目标」，一定可进 —— 除非这一帧被别的坦克占住了 */
+      __probeCell.x = t.x; __probeCell.y = t.y;
+      if (canEnter(t, __probeCell)){
+        const ox = t.x, oy = t.y;
+        t.x = t.movingTo.x; t.y = t.movingTo.y;   // 原目标格成为新出发点
+        t.movingTo.x = ox;  t.movingTo.y = oy;    // 原地改字段，不新建对象（每帧零分配）
+      } else {
+        snapToGrid(t);
+        t.movingTo = null;
+      }
+    } else if (t.movingTo.x !== t.x + d.dx || t.movingTo.y !== t.y + d.dy){
       snapToGrid(t);
       t.movingTo = null;
     }
@@ -1082,13 +1177,15 @@ function fireBullet(t){
     px: t.px + d.dx*16, py: t.py + d.dy*16,
     dir: t.dir, ang, speed: spd * (ug.speedK || 1),
     owner: t, dead: false, power,
-    gun: useGun, hitIds: null, clashCd: 0,
+    gun: useGun, hitIds: null,
     brickLeft: ug.brickPierce || 0, pierceLeft: ug.pierce || 0,
   });
   if (ug.spread){
-    // 扇形 ±22°：绕开「同屏弹数 = power」的上限，散弹枪的卖点正在于此
+    /* 扇形：绕开「同屏弹数 = power」的上限，散弹枪的卖点正在于此。
+     * 5 发 × 15° 步长 = ±30° 覆盖；步长写死 15° 而不是按发数摊开，
+     * 是为了让「加发数」只加宽度、不改变单发之间的夹角手感。 */
     for (let i = 0; i < ug.spread; i++){
-      const off = (i - (ug.spread - 1) / 2) * (22 * Math.PI / 180);
+      const off = (i - (ug.spread - 1) / 2) * (15 * Math.PI / 180);
       bullets.push(mk(angFor(t.dir) + off));
     }
   } else {
@@ -1192,15 +1289,16 @@ function pickDirByField(e, field){
 }
 /* 敌人抢道具：仅 hunter、仅 5 格内、仅当能真正缩短距离时转向 */
 function tryGrabItem(e){
-  if (e.role !== 'hunter' || !items.length) return false;
-  if (Math.random() > ENEMY_ITEM_GREED) return false;
+  /* v1.7.0：取消「只有 hunter 抢」+「掷概率」两个限制 —— 所有敌人进入 3.5 格范围
+   * 都会主动去拿（玩家要的是「像人一样会抢」）。 */
+  if (!items.length) return false;
   let best = null, bd = Infinity;
   for (const it of items){
     if (it.dead) continue;
     const d = Math.abs(it.x - e.x) + Math.abs(it.y - e.y);
     if (d > 0 && d < bd){ bd = d; best = it; }
   }
-  if (!best || bd > 5) return false;
+  if (!best || bd > ENEMY_ITEM_RANGE) return false;
   const opts = [];
   for (let d = 0; d < 4; d++){
     const cell = { x: e.x + DIRS[d].dx, y: e.y + DIRS[d].dy };
@@ -1257,9 +1355,18 @@ const __probeCell = { x: 0, y: 0 };   // 复用同一个对象，避免每帧新
 function wantDir(t, want){
   if (t.dir === want){ if (t.pendingDir != null) t.pendingDir = null; return; }
   if (!t.movingTo){ t.dir = want; t.pendingDir = null; return; }
+  const d = DIRS[want];
+  /* 反向（180°）：目标是退回原出发格，**不需要探测「新方向前方」** —— 原路本来就通。
+   * 原实现照样探测 lx + d.dx，若那一格有砖/水就写入 pendingDir 缓冲、等走到格心才生效：
+   * 坦克处于格子前半段时按反向，最多要等 385ms（一格耗时），手感就是
+   * 「长按某方向之后再反向很钝」。反向直接转，位置由 updateTankMove 交换起终点。 */
+  if (t.movingTo.x - t.x === -d.dx && t.movingTo.y - t.y === -d.dy){
+    t.dir = want;
+    t.pendingDir = null;
+    return;
+  }
   const lx = Math.round((t.px - TILE/2) / TILE);
   const ly = Math.round((t.py - TILE/2) / TILE);
-  const d = DIRS[want];
   __probeCell.x = lx + d.dx;
   __probeCell.y = ly + d.dy;
   if (canEnter(t, __probeCell)){
@@ -1291,11 +1398,16 @@ function drivePlayerTank(t, ks, dt){
   }
 }
 
+/* 射击冷却：普通枪 0.4s，冲锋枪靠 fireK 压到 0.2s（「射速快」就靠这一条） */
+function fireCooldown(t){
+  const gg = GUNS[t.gun] || GUNS.normal;
+  return t.fire * (gg.fireK || 1);
+}
 function updatePlayer(dt){
   if (player.dead){
     player.deadTimer -= dt;
     if (player.deadTimer <= 0 && lives > 0){
-      player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln:2, power: 1});
+      player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln:RESPAWN_INVULN, power: 1});
       addSpawnFx(player.px, player.py);
       sfx.spawn();
     }
@@ -1315,7 +1427,7 @@ function updatePlayer(dt){
     player.bulletCd -= dt;
     if (player.bulletCd <= 0 && countBullets(player) < player.power){
       fireBullet(player);
-      player.bulletCd = player.fire;
+      player.bulletCd = fireCooldown(player);
     }
   } else {
     player.bulletCd = Math.min(player.bulletCd, 0.05);
@@ -1327,7 +1439,7 @@ function updatePlayer2(dt){
   if (player2.dead){
     player2.deadTimer -= dt;
     if (player2.deadTimer <= 0 && lives2 > 0){
-      player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', {invuln:2, power: 1});
+      player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', {invuln:RESPAWN_INVULN, power: 1});
       addSpawnFx(player2.px, player2.py);
       sfx.spawn();
     }
@@ -1347,7 +1459,7 @@ function updatePlayer2(dt){
     player2.bulletCd -= dt;
     if (player2.bulletCd <= 0 && countBullets(player2) < player2.power){
       fireBullet(player2);
-      player2.bulletCd = player2.fire;
+      player2.bulletCd = fireCooldown(player2);
     }
   } else {
     player2.bulletCd = Math.min(player2.bulletCd, 0.05);
@@ -1473,7 +1585,9 @@ function applyHit(b, t){
     else { t.burnT = Math.max(t.burnT, BURN_TIME); t.burnAcc = 0; }
   }
   if (g.slow) t.slowT = Math.max(t.slowT, t.isPlayer ? SLOW_TIME_P : SLOW_TIME_E);
-  damageTank(t, 1, 'bullet');
+  /* 冲锋枪 dmg=0.5：对 1 血敌人要两枪。玩家侧恒为 1 —— 玩家只有 1 血，
+   * 半伤会变成「挨两枪才死」，等于白送一条命。 */
+  damageTank(t, (t.isPlayer ? 1 : (g.dmg || 1)), 'bullet');
   if (b.pierceLeft > 0){                 // 激光 / 穿甲钻：贯穿
     b.pierceLeft--;
     if (!b.hitIds) b.hitIds = [];
@@ -1516,10 +1630,10 @@ function bulletHalfSize(b){
   return (b.dir % 2 === 0) ? { hw: w/2, hh: h/2 } : { hw: h/2, hh: w/2 };
 }
 function tryBulletClash(b){
-  if (!b.owner || b.clashCd > 0) return false;
+  if (!b.owner) return false;
   let best = null, bestD = Infinity;
   for (const o of bullets){
-    if (o === b || o.dead || !o.owner || o.clashCd > 0) continue;
+    if (o === b || o.dead || !o.owner) continue;
     if (b.owner.isPlayer === o.owner.isPlayer) continue;   // 同阵营放行
     const A = bulletHalfSize(b), B = bulletHalfSize(o);
     if (!(Math.abs(b.px - o.px) < A.hw + B.hw && Math.abs(b.py - o.py) < A.hh + B.hh)) continue;
@@ -1539,9 +1653,8 @@ function tryBulletClash(b){
   // 只前进不倒退：否则侧面/追尾对撞时子弹会视觉上「弹回去」
   const dv = DIRS[win.dir];
   if ((mx - win.px) * dv.dx + (my - win.py) * dv.dy >= 0){ win.px = mx; win.py = my; }
-  win.power = Math.max(1, Math.abs(pb - po));   // 谁先触发都要用差值绝对值，否则低级弹先撞时算成负数
-  win.speed = bulletSpeed(win.owner, win.power) * ((GUNS[win.gun] || GUNS.normal).speedK || 1);
-  win.clashCd = CLASH_CD;      // 一次交火最多被削一级，防止 3 级弹被杂兵弹幕稀释
+  /* 强弹**不降级、不改速**：等级差只决定谁能活下来。
+   * 原实现按 |高-低| 降级，1 级弹能把 3 级弹打成 2 级 —— 弱弹凭空削弱强弹，反直觉。 */
   lose.dead = true;
   sfx.steel();
   return win !== b;            // 幸存者继续飞（false），被吃掉则退出子步（true）
@@ -1550,7 +1663,7 @@ function tryBulletClash(b){
 function updateBullets(dt){
   for (const b of bullets){
     if (b.dead) continue;
-    if (b.clashCd > 0) b.clashCd -= dt;
+    /* clashCd 已随「不再降级」一起移除，原本这里是它的衰减 */
     const total = b.speed * dt;
     // 子步由 5px 收紧到 3px：保证高速对撞时抵消判定不会漏检
     const steps = Math.max(1, Math.ceil(total / 3));
@@ -1616,7 +1729,9 @@ function hitTank(t){ return damageTank(t, 1, 'legacy'); }   // 兼容旧调用�
 function spreadBurn(src){
   for (const e of enemies){
     if (e.dead || e.invuln > 0) continue;
-    if (Math.abs(e.px - src.px) < TILE && Math.abs(e.py - src.py) < TILE){
+    /* v1.7.0：传染半径 1 格 → 2 格（玩家反馈 1 格几乎看不出「会传染」） */
+    /* 用 <= 而不是 <：格子间距正好 2 格时距离是 40px，严格小于会漏掉「正好的 2 格」。 */
+    if (Math.abs(e.px - src.px) <= TILE * 2 && Math.abs(e.py - src.py) <= TILE * 2){
       e.burnT = Math.max(e.burnT, BURN_TIME * 0.4);
       e.burnGen = (src.burnGen || 0) + 1;
       e.burnAcc = 0;
@@ -1667,13 +1782,63 @@ function destroyBase(){
   addExplosion(12*TILE+TILE, 24*TILE+TILE, 'big');
   addExplosion(12*TILE+TILE, 24*TILE+TILE, 'big');
   sfx.playerBoom();
+  /* 复活甲：还有额度就不进结算，挂一个修复倒计时（见 tickBaseRevive） */
+  if (baseRevive > 0){
+    baseRevive--;
+    baseReviveT = BASE_REVIVE_DELAY;
+    hint('基地被摧毁！' + BASE_REVIVE_DELAY + ' 秒后自动修复');
+    return;
+  }
   overReason = '基地被摧毁';
   gameOver();
+}
+/* 基地复活倒计时：到点把 4 个 BASE 格写回去 */
+function tickBaseRevive(dt){
+  if (baseReviveT <= 0) return;
+  baseReviveT -= dt;
+  if (baseReviveT > 0) return;
+  baseReviveT = 0;
+  baseAlive = true;
+  setTile(24, 12, BASE); setTile(24, 13, BASE);
+  setTile(25, 12, BASE); setTile(25, 13, BASE);
+  addExplosion(12*TILE+TILE, 24*TILE+TILE, 'big');
+  sfx.spawn();
+  hint('基地已修复');
+}
+/* 钢板：把基地外围一圈砖换成钢，记录换了哪些格，到点再换回砖 */
+function applyFortify(){
+  fortifyCells.length = 0;
+  for (let r = 22; r <= 25; r++){
+    for (let c = 10; c <= 15; c++){
+      if (map[r][c] !== BRICK) continue;
+      setTile(r, c, STEEL);
+      fortifyCells.push([r, c]);
+    }
+  }
+  fortifyT = FORTIFY_TIME;
+  hint('基地钢板加固 ' + FORTIFY_TIME + ' 秒');
+  sfx.steel();
+}
+function tickFortify(dt){
+  if (fortifyT <= 0) return;
+  fortifyT -= dt;
+  if (fortifyT > 0) return;
+  fortifyT = 0;
+  /* 只把「仍然是钢」的格子换回砖：期间被打穿的格子保持空，不凭空长回来 */
+  for (let i = 0; i < fortifyCells.length; i++){
+    const r = fortifyCells[i][0], c = fortifyCells[i][1];
+    if (map[r][c] === STEEL) setTile(r, c, BRICK);
+  }
+  fortifyCells.length = 0;
 }
 
 function gameOver(){
   if (state !== 'playing') return;
   state = 'over';
+  /* 续关点 = 死亡所在难度档的第 1 关。一局最多 25 关、中途没有任何存档，
+   * 一次失误就退回开局难度，这是单人「怎么也过不去」的最大结构性原因。
+   * 这里只负责记录；是否启用由 startGame() 判断（回标题页重开不续关）。 */
+  checkpointLevel = diffStartLevel(curDiff());
   startLockT = gameTime + 0.8;   // 死亡瞬间手指乱点，防误触重开
   sfx.over();
   if (score > hiScore){
@@ -1805,7 +1970,7 @@ function pickUpItem(it, tank){
         sfx.boom();
       } else {
         grenadeBlasts.push({ px: tank.px, py: tank.py, t: GRENADE_FUSE, r: GRENADE_RADIUS * TILE });
-        hint('敌军引爆手雷！注意红圈');
+        hint('敌军埋雷！');
         sfx.clock();
       }
       break;
@@ -1819,8 +1984,8 @@ function pickUpItem(it, tank){
       sfx.clock();
       break;
     case 'tank':
-      if (tank === player) lives = Math.min(6, lives + 1);
-      else if (tank === player2) lives2 = Math.min(6, lives2 + 1);
+      if (tank === player) lives = Math.min(MAX_LIVES, lives + 1);
+      else if (tank === player2) lives2 = Math.min(MAX_LIVES, lives2 + 1);
       else enemyReinforce();
       break;
     case 'amphibious':
@@ -1838,15 +2003,24 @@ function pickUpItem(it, tank){
                           : '敌军加速！'));
       break;
     }
+    case 'fortify':
+      /* 钢板：把基地外围的砖墙换成钢，25 秒后变回砖。
+       * 只换「当前是砖」的格子，已经空了/本来就是钢的不动；
+       * 期间被 2 级弹打穿的格子不会在恢复时复活（见 tickFortify）。 */
+      if (isP) applyFortify();
+      else sfx.shield();          // 敌人吃到：不给收益，白拿一次（道具本来只服务玩家）
+      break;
     case 'eagle':
-      /* 老鹰：立即进入 60 秒无敌。
-       * 采用「重置计时器」机制 —— 重复拾取重新计时 60 秒，不做叠加。 */
+      /* v1.7.0 改：老鹰道具 → 基地「复活甲」。
+       * 原来是「基地/玩家 60 秒无敌」，玩家反馈那样只是拖时间；
+       * 现在改成一次性保险：基地被打爆不进结算，3 秒后自动修复。 */
       if (tank.isPlayer){
-        playerEagle = EAGLE_TIME;
-        tank.invuln = EAGLE_TIME;
+        baseRevive = 1;
+        hint('基地复活甲就绪（被打爆后 3 秒自动修复）');
       } else {
-        // 敌方拾取退化为普通护盾（6 秒），避免敌军长期无敌破坏关卡平衡
-        tank.invuln = ENEMY_SHIELD_TIME;
+        // 敌方拾取：什么也不给（复活甲是「基地」的，敌人拿不走）。
+        // 与「钢板」保持一致，避免敌军吃掉玩家要的道具还额外套一层盾。
+        hint('敌军吃掉了复活甲');
       }
       sfx.itemPickup();
       break;
@@ -1906,17 +2080,19 @@ function startLevel(fresh){
   enemies = []; bullets = []; items = []; explosions = []; grenadeBlasts = [];
   enemyQueue = buildQueue();
   spawnTimer = 1.0;
+  /* 钢板/复活甲都是「本关内的临时状态」，换关清空（否则上一关的钢板会残留到新地图） */
+  fortifyT = 0; fortifyCells.length = 0; baseRevive = 0; baseReviveT = 0;
   killCount = 0;
   freezeEnemies = 0; freezePlayer = 0;
   playerEagle = 0;
   levelIntro = LEVEL_INTRO_TIME;   // 幕布开场
   baseAlive = true;
   const carryPower = (!fresh && player && !player.dead) ? (player.power || 1) : 1;   // 下一关继承；重开一局则重置为 1
-  player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln: 2, power: carryPower});
+  player = makeTank(PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0, 'player', {invuln: RESPAWN_INVULN, power: carryPower});
   addSpawnFx(player.px, player.py);
   if (netMode === 'host'){   // 双人房主：同步生成玩家2（客方仅靠快照渲染）
     const carryPower2 = (!fresh && player2 && !player2.dead) ? (player2.power || 1) : 1;
-    player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', {invuln: 2, power: carryPower2});
+    player2 = makeTank(PLAYER2_SPAWN.x, PLAYER2_SPAWN.y, 0, 'player', {invuln: RESPAWN_INVULN, power: carryPower2});
     addSpawnFx(player2.px, player2.py);
   }
   refreshFields();
@@ -1926,9 +2102,19 @@ function startLevel(fresh){
 }
 
 function startGame(){
-  score = 0; lives = 2; lives2 = 2;
+  const fromOver = (state === 'over');     // 必须在 startLevel 改写 state 之前取
+  score = 0; lives = START_LIVES; lives2 = START_LIVES;
   nextExtraLifeScore = 2000;
-  level = diffStartLevel(startDiff);   // 从标题页选定的难度开始
+  /* 新开一局才重置配额：续关次数是按「这一局」算的，不是按单条命 */
+  continuesLeft = (netMode === 'off') ? CONTINUE_LIMIT_SOLO : CONTINUE_LIMIT_COOP;
+  if (fromOver && checkpointLevel > 0){
+    /* 续关：从结束画面直接重开 → 回到死亡所在难度档的第 1 关（最多重打 4 关）。
+     * 回标题页重新选难度则不续关 —— 那说明玩家想从头来。 */
+    level = checkpointLevel;
+  } else {
+    checkpointLevel = 0;
+    level = diffStartLevel(startDiff);   // 从标题页选定的难度开始
+  }
   startLevel(true);   // 重开一局：火力等级归 1
 }
 
@@ -1936,7 +2122,7 @@ function startGame(){
 function addScore(n){
   score += (n || 0);
   if (score >= nextExtraLifeScore){
-    lives = Math.min(6, lives + 1);
+    lives = Math.min(MAX_LIVES, lives + 1);
     nextExtraLifeScore += 2000;
     hint('得分奖命！');
     sfx.item();
@@ -1959,6 +2145,8 @@ function update(dt){
   if (freezePlayer > 0) freezePlayer -= dt;
   if (state === 'playing'){
     updateGrenades(dt);
+    tickBaseRevive(dt);
+    tickFortify(dt);
     updatePlayer(dt);
     if (netMode === 'host' && player2) updatePlayer2(dt);   // 双人：房主驱动玩家2（输入来自客方）
     for (const e of enemies) updateEnemy(e, dt);
@@ -2207,6 +2395,9 @@ function tankColors(t){
 }
 /* 敌人拾取手雷后的红色警示圈：闪烁 + 引信倒计时，给玩家跑开的机会 */
 function drawGrenadeWarn(){
+  /* v1.7.0：按需求去掉红圈预警 —— 敌人埋雷不再有可见提示，引信照旧 1 秒。
+   * 函数保留为空实现：render() 里还在调它，删掉调用点意义不大且容易漏。 */
+  if (true) return;
   for (const g of grenadeBlasts){
     const on = flashOn(8);
     ctx.save();
@@ -2286,7 +2477,9 @@ function drawTank(t){
   // 无敌闪烁：减少动效时不隐身（10Hz 闪烁不合规），改由护盾光环标识
   if (t.invuln > 0 && !reduceMotion && Math.floor(gameTime*10) % 2 === 0) return;
   const c = tankColors(t);
-  const cx = Math.round(t.px), cy = Math.round(t.py);
+  /* 渲染位置：客方对房主坦克做了插值（rpx/rpy），单机与房主侧无此字段，回退 px/py */
+  const cx = Math.round(t.rpx !== undefined ? t.rpx : t.px);
+  const cy = Math.round(t.rpy !== undefined ? t.rpy : t.py);
   // 护盾光环（减少动效时，短时无敌也画环，替代闪烁提示）
   if (t.invuln > 2.5 || (reduceMotion && t.invuln > 0)){
     ctx.strokeStyle = 'rgba(127,208,255,0.9)';
@@ -2437,7 +2630,7 @@ function drawItem(it){
   const x = it.x*TILE, y = it.y*TILE, cx = x+10, cy = y+10;
   const ring = { star:'#F0C040', grenade:'#FF8A6B', shield:'#3FB7FF',
                  clock:'#E8EBEF', tank:'#FFD23F', amphibious:'#7FD0FF',
-                 eagle:'#FFC300', speed:'#5BE37A' }[it.type] || WEAPON_RING[it.type] || '#F0C040';
+                 eagle:'#FFC300', speed:'#5BE37A', fortify:'#C7CDD4' }[it.type] || WEAPON_RING[it.type] || '#F0C040';
   // 呼吸外圈（减少动效时静止）
   const pulse = reduceMotion ? 0.5 : 0.5 + 0.5*Math.sin(gameTime*5);
   ctx.fillStyle = ring;
@@ -2520,6 +2713,14 @@ function drawItem(it){
       ctx.moveTo(cx + 3, cy - 8); ctx.lineTo(cx - 5, cy + 1); ctx.lineTo(cx - 1, cy + 1);
       ctx.lineTo(cx - 3, cy + 8); ctx.lineTo(cx + 5, cy - 2); ctx.lineTo(cx + 1, cy - 2);
       ctx.closePath(); ctx.fill();
+      break;
+    case 'fortify':
+      /* 钢板：灰底方块 + 四角铆钉，和「加固基地」的语义对得上 */
+      px(cx-8, cy-8, 16, 16, '#C7CDD4');
+      px(cx-8, cy-8, 16, 2, '#EDF1F5');
+      px(cx-8, cy+6, 16, 2, '#7A828C');
+      px(cx-6, cy-6, 3, 3, '#7A828C'); px(cx+3, cy-6, 3, 3, '#7A828C');
+      px(cx-6, cy+1, 3, 3, '#7A828C'); px(cx+3, cy+1, 3, 3, '#7A828C');
       break;
     case 'eagle':
       drawEagleItem(x, y);
@@ -2679,10 +2880,15 @@ function drawCoopHud(){
   ctx.font = 'bold 13px "Microsoft YaHei",sans-serif';
   ctx.fillStyle = '#F0C040';
   ctx.fillText('P1', 10, 20);
-  for (let i = 0; i < Math.max(0, lives); i++){ px(34 + i*15, 9, 11, 11, '#FFD23F'); px(34+i*15, 13, 3, 6, '#A87A00'); }
-  ctx.fillStyle = '#7FD0FF';
+  /* 同样改成「一个图标 + ×N」：原来最多画 6 个，容易和右边内容挤在一起 */
+  px(34, 9, 11, 11, '#FFD23F'); px(38, 13, 3, 6, '#A87A00');
+  ctx.fillStyle = '#FFD23F'; ctx.font = 'bold 12px sans-serif';
+  ctx.fillText('×' + Math.max(0, lives), 50, 20);
+  ctx.fillStyle = '#7FD0FF'; ctx.font = 'bold 13px "Microsoft YaHei",sans-serif';
   ctx.fillText('P2', 10, 40);
-  for (let i = 0; i < Math.max(0, lives2); i++){ px(34 + i*15, 29, 11, 11, '#7FD0FF'); px(34+i*15, 33, 3, 6, '#2F6F7E'); }
+  px(34, 29, 11, 11, '#7FD0FF'); px(38, 33, 3, 6, '#2F6F7E');
+  ctx.fillStyle = '#7FD0FF'; ctx.font = 'bold 12px sans-serif';
+  ctx.fillText('×' + Math.max(0, lives2), 50, 40);
   if (coopDropped){ ctx.fillStyle = '#FF6B6B'; ctx.font = 'bold 12px sans-serif'; ctx.fillText('（' + (netMode === 'host' ? '玩家2' : '房主') + '掉线，重连中…）', 10, 58); }
   else if (netMode === 'host' && coopRtt > 0){
     ctx.fillStyle = coopRtt > 150 ? '#FF8A6B' : '#98A2AD';
@@ -2779,9 +2985,13 @@ function drawPanel(){
 
   ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
   ctx.fillText('生命 LIVES', x0+14, 178);
-  for (let i = 0; i < Math.max(0, lives); i++){
-    drawLifeIcon(x0+14+i*26, 186);
-  }
+  /* 改成「一个图标 + ×N」：原来按剩余命数逐个画（6 条命 = 6×26 = 156px），
+   * 会顶到 160px 宽的面板右边界；而且要靠数图标才知道还剩几条。
+   * 固定一个图标 + 数字，宽度恒定、一眼可读。 */
+  drawLifeIcon(x0+14, 186);
+  ctx.fillStyle = lives > 0 ? '#FFD23F' : '#6B7178';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('×' + Math.max(0, lives), x0+38, 201);
 
   ctx.fillStyle = '#A9B4C0'; ctx.font = '12px sans-serif';
   ctx.fillText('敌余 ENEMY', x0+14, 228);
@@ -2960,6 +3170,8 @@ function drawTitle(){
   ], 92);
 }
 function drawOver(){
+  /* 续关信息不再画在画面里 —— 已经挪到按钮文案上（「继续本关（剩 N 次）」/「重新开始（第 N 关）」）。
+   * 信息贴在要点的那个按钮上比放一行小字更好认，也省下竖向空间给多出来的那一行按钮。 */
   overlayText([
     { text:'GAME OVER', size:'bold 52px sans-serif', color:'#FF5B5B', gap:76 },
     { text: overReason, size:'22px "Microsoft YaHei",sans-serif', color:'#F0C040', gap:46 },
@@ -3099,6 +3311,21 @@ function arrBullet(a){
 }
 /* 地图增量：setTile 写入，由 serializeSnapshot 取走；超过阈值就退回全量 */
 let snapSeq = 0, coopRtt = 0, lastSnapT = 0;
+/* RTT 只显示窗口内的**最小值**。
+ * 原实现每收到一个 ack 就直接覆盖 coopRtt —— 单次卡顿（客方那一帧没顾上发输入、
+ * 标签页被浏览器节流、GC 停顿）会采到一个异常大的样本，而且会一直挂在 HUD 上，
+ * 看起来就是「延迟一直 180ms」。最小值代表这条链路的往返下限，才是玩家真正感知的那一档。 */
+const RTT_WIN = 16;
+const rttWin = [];
+function pushRtt(v){
+  if (!(v >= 0 && v < 1e6)) return -1;
+  rttWin.push(v);
+  if (rttWin.length > RTT_WIN) rttWin.shift();
+  let m = Infinity;
+  for (let i = 0; i < rttWin.length; i++) if (rttWin[i] < m) m = rttWin[i];
+  coopRtt = Math.round(m);
+  return v;                 // 返回本次原始样本：显示值取窗口最小，但调用方可据此校验反查是否正确
+}
 /* 最近若干次快照的发送时刻（环形缓冲）：客方 ack 到达时往往已经发过更新的帧，
  * 所以不能只比对「最近一帧」，要在窗口内反查该 seq 的发送时间。 */
 let snapPing = [];
@@ -3114,6 +3341,7 @@ function serializeSnapshot(){
     s: state, lvl: level, score: score, lives: lives, lives2: lives2,
     fe: freezeEnemies, fp: freezePlayer, pe: playerEagle, li: levelIntro, base: baseAlive ? 1 : 0,
     pz: paused ? 1 : 0,   // 暂停状态兜底：pause 消息丢包时，恢复正常发快照的第一帧即可纠偏
+    cg: continuesLeft,    // 剩余续关次数：客方按钮要显示同一个数字，用完了要一起藏起来
     p: tankArr(player),
     p2: tankArr(player2),
     e: enemies.filter(en => !en.dead).map(tankArr),
@@ -3141,6 +3369,7 @@ function applySnapshot(s){
   freezeEnemies = s.fe; freezePlayer = s.fp; playerEagle = s.pe; levelIntro = s.li;
   baseAlive = (s.base === 1 || s.base === true);
   if (typeof s.pz === 'number') setPaused(s.pz === 1, false);   // 被动跟随，不回广播
+  if (typeof s.cg === 'number') continuesLeft = s.cg;           // 客方跟随房主的续关配额
   if (s.m){                               // 全量地图
     map = s.m.map(r => r.slice());
     terrainFull = true;
@@ -3150,19 +3379,32 @@ function applySnapshot(s){
       if (map[d[0]]) { map[d[0]][d[1]] = d[2]; markTileDirty(d[0], d[1]); }
     }
   }
+  const prevR = (player && player.rpx !== undefined) ? { x: player.rpx, y: player.rpy } : null;
   player = arrTank(s.p);
+  /* 快照是 30Hz，渲染是 60Hz：沿用上一帧渲染位置当插值起点，
+   * 否则每次快照到达都会把画面「拽」回权威点，叠成阶梯感。 */
+  if (netMode === 'guest' && prevR){ player.rpx = prevR.x; player.rpy = prevR.y; }
   /* 客方玩家2 的「本地预测对账」：误差在 PRED_TOL 内就保留本地预测出来的位置，
    * 否则采纳房主的权威值。若每个快照都无脑覆盖，本地预测等于白做 ——
    * 画面会被 30Hz 的权威位置反复拽回去，反而看出抖动。 */
   const np2 = s.p2 ? arrTank(s.p2) : null;
   if (np2 && netMode === 'guest' && player2 && !np2.dead && !player2.dead){
     const ddx = player2.px - np2.px, ddy = player2.py - np2.py;
-    if (ddx*ddx + ddy*ddy <= PRED_TOL*PRED_TOL){
+    const d2 = ddx*ddx + ddy*ddy;
+    if (d2 <= PRED_TOL*PRED_TOL){
+      /* 容差内：完全保留本地预测。若每个快照都无脑覆盖，本地预测等于白做 ——
+       * 画面会被 30Hz 的权威位置反复拽回去，反而看出抖动。 */
       np2.px = player2.px; np2.py = player2.py;
       np2.x  = player2.x;  np2.y  = player2.y;
       np2.dir = player2.dir;
       np2.movingTo = player2.movingTo;
       np2.pendingDir = player2.pendingDir;
+    } else if (d2 <= PRED_SNAP*PRED_SNAP){
+      /* 超出容差（快速来回摆动时，本地预测与房主权威分叉）：位置仍采纳权威值，
+       * 但把**渲染起点**留在本地旧位置，交给 smoothRemoteTank 在几帧内滑过去。
+       * 原实现在这里直接瞬移，ADAD 时误差反复越线 —— 表现就是「来回摆动后位置突然跳一下」。
+       * 逻辑位置一刻都没含糊：碰撞 / 命中 / 结算全部仍以房主为准。 */
+      np2.rpx = player2.px; np2.rpy = player2.py;
     }
   }
   player2 = np2;
@@ -3202,7 +3444,8 @@ function unpackInput(b){
  * 快照到达时在 applySnapshot 里按容差对账（误差小就保留本地结果，超了才采纳权威值）。
  * 两边跑同一份确定性代码、又都会吸附到格心，所以正常情况偏差只有几个像素；
  * 真正分歧（死亡 / 重生 / 换关 / 被别的坦克卡住）时误差会立刻超标，自然回落到权威值。 */
-const PRED_TOL = 12;            // 像素：超过就认定与房主分歧，直接采纳权威位置
+const PRED_TOL = 12;            // 像素：容差内完全保留本地预测（不被 30Hz 权威位置反复拽回）
+const PRED_SNAP = TILE * 3;     // 像素：跨度超过 3 格（复活 / 换关 / 传送）才直接吸附，不做滑行
 
 /* ---- 客方开火本地预测（v1.6.2）----
  * 开火的「权威」同样在房主那侧：客方的开火要先经 上行 → 房主一帧 → 下行，屏幕上才
@@ -3296,6 +3539,25 @@ function reconcilePredBullets(){
     if (!matched) predBullets[w++] = p;
   }
   predBullets.length = w;
+}
+
+/* 客方渲染插值：房主那台坦克的位置按 30Hz 快照下发，60Hz 渲染下直接套用就是
+ * 「每两帧才动一次」，看起来一顿一顿 —— 这是联机时「看队友有点卡」的主因，
+ * 与网络延迟无关（局域网 RTT < 5ms 也照样卡）。
+ * 只平滑**渲染坐标** rpx/rpy，不动权威的 px/py：逻辑位置仍完全由房主决定，
+ * 因此碰撞、命中、快照对账都不受影响。 */
+const REMOTE_SMOOTH = 0.45;
+function smoothRemoteTank(t, dt){
+  if (!t) return;
+  if (t.rpx === undefined){ t.rpx = t.px; t.rpy = t.py; return; }
+  const dx = t.px - t.rpx, dy = t.py - t.rpy;
+  /* 复活 / 换关 / 传送：距离过大直接吸附，避免长距离滑行 */
+  if (Math.abs(dx) > TILE * 3 || Math.abs(dy) > TILE * 3){ t.rpx = t.px; t.rpy = t.py; return; }
+  if (dx === 0 && dy === 0) return;
+  const k = 1 - Math.pow(1 - REMOTE_SMOOTH, Math.min(dt, 0.05) * 60);   // 帧率无关
+  t.rpx += dx * k; t.rpy += dy * k;
+  if (Math.abs(t.px - t.rpx) < 0.08) t.rpx = t.px;
+  if (Math.abs(t.py - t.rpy) < 0.08) t.rpy = t.py;
 }
 
 function predictGuestPlayer2(dt){
@@ -3400,6 +3662,7 @@ function coopHandleMsg(msg){
     setPaused(false, true);
     if (msg.act === 'title') toTitle();
     else if (msg.act === 'next' && state === 'clear') nextLevel();
+    else if (msg.act === 'continue') continueLevel();
     else if (state !== 'playing') startGame();
   } else if (msg.type === 'state'){
     if (netMode === 'guest'){
@@ -3414,7 +3677,7 @@ function coopHandleMsg(msg){
       // 客方回带 ack：在最近 16 帧的发送时刻里反查该 seq，得到往返时延（显示在双人 HUD 上）
       if (typeof msg.ack === 'number'){
         for (let i = snapPing.length - 1; i >= 0; i--){
-          if (snapPing[i][0] === msg.ack){ coopRtt = Math.round(performance.now() - snapPing[i][1]); break; }
+          if (snapPing[i][0] === msg.ack){ pushRtt(performance.now() - snapPing[i][1]); break; }
         }
       }
     }
@@ -3422,7 +3685,7 @@ function coopHandleMsg(msg){
 }
 
 function coopReset(){
-  netMode = 'off'; player2 = null; lives2 = 2; coopReady = false; coopDropped = false; coopRoomCode = '';
+  netMode = 'off'; player2 = null; lives2 = START_LIVES; coopReady = false; coopDropped = false; coopRoomCode = '';
   keys2 = {};
   coopBanner('');                 // 主动断开：收掉联机横幅
   if (typeof Net !== 'undefined') Net.disconnect();
@@ -3533,6 +3796,31 @@ function setKey(code, val){
 /* 统一的“开始 / 重新开始 / 下一关”入口。
  * 键盘 Enter、点按画布、工具栏按钮、画面内按钮四条路径共用，手机端无需键盘即可开局。
  * 联机时场景切换由房主执行：客方的点击会变成一条请求，房主做完再经快照同步回来。 */
+/* 「继续本关」：原地重开当前关卡（level 不变、分数保留），消耗 1 次配额。
+ * 与 startGame() 的区别 —— startGame 会把 level 拉回 checkpointLevel 并清空分数。 */
+function continueLevel(){
+  if (state !== 'over') return;
+  if (gameTime < startLockT) return;      // 与重新开始同一套误触保护
+  if (continuesLeft <= 0) return;
+  continuesLeft--;
+  lives = START_LIVES;
+  lives2 = START_LIVES;
+  startLevel(true);                       // level 不动 → 还是这一关；开局火力回到 1 级
+  hint('继续本关（剩 ' + continuesLeft + ' 次）');
+}
+function requestContinue(){
+  if (state !== 'over' || continuesLeft <= 0) return;
+  if (gameTime < startLockT) return;
+  if (netMode === 'guest'){
+    /* 客方不本地开局：次数在房主那边算，请求由房主执行后靠快照跟回来 */
+    if (typeof Net !== 'undefined' && Net.isOpen()){
+      Net.send({ type:'start', act: 'continue' });
+      coopSetStatus('已请求继续本关…');
+    }
+    return;
+  }
+  continueLevel();
+}
 function requestStart(){
   if (state === 'playing') return;
   if (gameTime < startLockT) return;        // 结束/过关后的误触保护
@@ -3660,6 +3948,7 @@ const ctlMute    = document.getElementById('ctl-mute');
 const caStart    = document.getElementById('ca-start');
 const caNext     = document.getElementById('ca-next');
 const caResume   = document.getElementById('ca-resume');
+const caContinue = document.getElementById('ca-continue');
 const caRestart  = document.getElementById('ca-restart');
 const caCoop     = document.getElementById('ca-coop');
 const caCodex    = document.getElementById('ca-codex');
@@ -3969,6 +4258,7 @@ const CA_BTNS = [
   [caStart,   'title'],
   [caNext,    'clear'],
   [caResume,  'paused'],
+  [caContinue, 'over'],        // 剩余次数为 0 时下面会再隐藏一次
   [caRestart, 'over paused'],
   [caCoop,    'title'],
   [caCodex,   'title over clear'],
@@ -3988,12 +4278,28 @@ function syncCenterActions(){
   /* idle = 不在「真正对局中」：摇杆 / 开火键让位给菜单按钮，避免两者抢同一块位置 */
   if (document.body && document.body.classList) document.body.classList.toggle('idle', slot !== 'playing');
   for (const it of CA_BTNS) caShow(it[0], it[1].split(' ').indexOf(slot) >= 0);
+  /* 「继续本关」额外受次数约束：用完就藏，并把「重新开始」重新点亮成主按钮，
+   * 否则玩家会看到一个点不动的蓝按钮。文案里带上剩余次数，省掉画面里那一行小字。 */
+  const canContinue = (state === 'over' && !paused && continuesLeft > 0);
+  caShow(caContinue, canContinue);
+  if (caContinue){
+    const ctxt = '⏵ 继续本关（剩 ' + continuesLeft + ' 次）';
+    if (continuesLeft > 0 && caContinue.textContent !== ctxt) caContinue.textContent = ctxt;
+  }
+  if (caRestart && caRestart.classList) caRestart.classList.toggle('primary', !canContinue);
+  if (caRestart){
+    /* 「重新开始」会退回死亡所在难度档的第 1 关，把目标关卡写在按钮上，免得玩家以为是原地重开 */
+    const lv = checkpointLevel > 0 ? checkpointLevel : diffStartLevel(startDiff);
+    const rtxt = (state === 'over') ? ('↻ 重新开始（第 ' + lv + ' 关）') : '↻ 重新开始';
+    if (caRestart.textContent !== rtxt) caRestart.textContent = rtxt;
+  }
   /* 联机客方的难度由房主决定：即使在标题页也隐藏选择行，避免「点了没反应」 */
   if (netMode === 'guest' && diffRow && diffRow.style) diffRow.style.display = 'none';
 }
 if (caStart)   caStart.addEventListener('click',   () => { initAudio(); enterMobileFullscreen(); requestStart(); });
 if (caNext)    caNext.addEventListener('click',    () => { initAudio(); requestStart(); });
 if (caResume)  caResume.addEventListener('click',  () => { initAudio(); setPaused(false, true); });
+if (caContinue) caContinue.addEventListener('click', () => { initAudio(); requestContinue(); });
 if (caRestart) caRestart.addEventListener('click', () => { initAudio(); setPaused(false, true); requestStart(); });
 if (caCoop)    caCoop.addEventListener('click',    () => { initAudio(); enterMobileFullscreen(); coopOpen(); });
 if (caCodex)   caCodex.addEventListener('click',   () => { initAudio(); showCodex(true); });
@@ -4025,7 +4331,7 @@ if (caTitle)   caTitle.addEventListener('click',   () => {
  * 所以敌人与幕布都不会动）。房主切场景后补发一帧快照，客方才能跟着回标题。 */
 function toTitle(){
   if (netMode === 'guest') return;      // 客方不自行切场景，等房主
-  score = 0; lives = 2; lives2 = 2; nextExtraLifeScore = 2000;
+  score = 0; lives = START_LIVES; lives2 = START_LIVES; nextExtraLifeScore = 2000;
   level = diffStartLevel(startDiff);
   startLevel(true);
   state = 'title';
@@ -4087,21 +4393,33 @@ function tuneQuality(dt){
 }
 
 function loop(now){
-  const dt = Math.min((now - last) / 1000, 0.05);
+  /* rawDt = 真实流逝，dt = 逻辑步长，两者必须分开：
+   * dt 要钳到 50ms（切后台回来时不能拿一个几秒的大步长直接穿墙），
+   * 但网络节拍若用钳过的 dt，帧率掉到 20fps 以下时发包间隔会被动拉长
+   * （10fps 时变成 50ms 一次），RTT 跟着虚高 —— 这是「延迟莫名 180ms」的成因之一。 */
+  const rawDt = Math.max(0, (now - last) / 1000);
+  const dt = Math.min(rawDt, 0.05);
   last = now;
   if (!paused){
     gameTime += dt;
     if (netMode !== 'guest') update(dt);   // 房主 / 单人：跑完整模拟
-    else predictGuestPlayer2(dt);          // 客方：只为自己那台坦克做本地预测（纯画面，权威仍在房主）
+    else {
+      predictGuestPlayer2(dt);             // 客方：只为自己那台坦克做本地预测（纯画面，权威仍在房主）
+      smoothRemoteTank(player, dt);        // 房主那台按 30Hz 快照来，渲染层补插值（否则「看队友一顿一顿」）
+      smoothRemoteTank(player2, dt);       // 自己那台被权威纠正后也要滑过去，不要瞬移
+    }
   }
   tuneQuality(dt);   // 持续掉帧时自动降一档 DPR（详见上方注释）
   /* 网络收发（20Hz）：房主发快照，客方发输入。
    * 这一段**不能**放进 if(!paused)：暂停期间房主不再发快照，只能靠 pause 心跳
    * 告诉客方「一起停」；客方也要继续上报输入，否则房主侧玩家2会保持最后一次输入不放。 */
   if (netMode !== 'off' && typeof Net !== 'undefined' && Net.isOpen()){
-    netSendAcc += dt;
+    /* 原实现 `netSendAcc = 0` 把不足一拍的余数丢掉，30fps 下 33.3ms 一拍尚可，
+     * 但 20fps（dt 被钳到 50ms）时实际变成 50ms 一拍，输入延迟直接多出 17ms。
+     * 改成减去一拍、保留余数，并给累积量封顶（避免后台回来连发）。 */
+    netSendAcc = Math.min(netSendAcc + Math.min(rawDt, 0.25), NET_TICK * 2);
     if (netSendAcc >= NET_TICK){
-      netSendAcc = 0;
+      netSendAcc -= NET_TICK;
       if (netMode === 'host'){
         if (paused){
           // 4Hz 暂停心跳：兜住 pause 消息丢包，让客方跟上暂停/继续

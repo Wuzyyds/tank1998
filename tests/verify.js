@@ -125,48 +125,134 @@ assert('C5 audioBlocked() 在无 AudioContext 时为 true（面板会提示）',
 /* ---------- D. 老鹰（无敌 60 秒）回归 ---------- */
 startGame();
 enemyQueue.length = 0; enemies.length = 0; items.length = 0;
-player.invuln = 0; playerEagle = 0;
+/* v1.7.0：老鹰道具从「60 秒无敌」改成「基地复活甲」—— 被打爆不再直接结算 */
+baseRevive = 0; baseReviveT = 0; baseAlive = true; checkpointLevel = 0;
 items.push({ x:player.x, y:player.y, px:player.px, py:player.py, type:'eagle', t:0 });
 collectItems();
-assert('D1 拾取老鹰 → 立即无敌 invuln=60', Math.abs(player.invuln - 60) < 1e-9, 'invuln=' + player.invuln);
-for (let i = 0; i < 400; i++) updatePlayer(0.05);
-assert('D2 20 秒后剩余 ≈40', Math.abs(playerEagle - 40) < 0.2, 'playerEagle=' + playerEagle.toFixed(3));
-items.length = 0;
-items.push({ x:player.x, y:player.y, px:player.px, py:player.py, type:'eagle', t:0 });
-collectItems();
-assert('D3 重复拾取重置 60（不叠加）', Math.abs(playerEagle - 60) < 1e-9, 'playerEagle=' + playerEagle.toFixed(3));
-for (let i = 0; i < 1220; i++) updatePlayer(0.05);
-assert('D4 60 秒后自动解除', playerEagle === 0 && player.invuln <= 0, 'invuln=' + player.invuln.toFixed(4));
+assert('D1 拾取老鹰 → 获得 1 次基地复活甲', baseRevive === 1 && baseReviveT === 0, 'revive=' + baseRevive);
+destroyBase();
+assert('D2 基地被打爆：不进入结算，转入 3 秒修复倒计时',
+       state === 'playing' && baseAlive === false && Math.abs(baseReviveT - 3) < 1e-9,
+       'state=' + state + ' alive=' + baseAlive + ' t=' + baseReviveT);
+assert('D3 倒计时期间复活甲已消耗', baseRevive === 0, 'revive=' + baseRevive);
+tickBaseRevive(3.1);
+assert('D4 3 秒后基地自动修复（4 个 BASE 格写回）',
+       baseAlive === true && map[24][12] === BASE && map[24][13] === BASE &&
+       map[25][12] === BASE && map[25][13] === BASE && baseReviveT === 0,
+       'alive=' + baseAlive + ' t=' + baseReviveT);
+baseAlive = true; destroyBase();
+assert('D5 复活甲用完：再次被打爆就真的结算', state === 'over' && baseRevive === 0, 'state=' + state);
+state = 'playing'; checkpointLevel = 0;
 
-/* ---------- E. 子弹等级吞噬（谁大吞谁，新等级 = |高-低|） ---------- */
+/* ---------- v1.7.0 武器 / 道具调整 ---------- */
+startGame();
+enemyQueue.length = 0; enemies.length = 0; bullets.length = 0; items.length = 0;
+for (let r = 4; r < 22; r++) for (let c = 2; c < 24; c++) map[r][c] = EMPTY;
+
+/* 冲锋枪：对 1 血敌人要两枪；对玩家仍然一击必死（玩家只有 1 血，半伤会变成白送一条命） */
+const smgE = makeTank(12, 8, 2, 'basic', { invuln: 0 });
+enemies.push(smgE);
+const mkHit = (t) => applyHit({ owner: player, gun: 'smg', power: 1, dead: false,
+                                px: t.px, py: t.py, dir: 1, hitIds: null, pierceLeft: 0 }, t);
+mkHit(smgE);
+const smgHp1 = smgE.hp, smgDead1 = smgE.dead;
+mkHit(smgE);
+assert('冲锋枪：对 1 血敌人要两枪（第一枪只掉半血）',
+       Math.abs(smgHp1 - 0.5) < 1e-9 && smgDead1 === false && smgE.dead === true,
+       'firstHp=' + smgHp1 + ' firstDead=' + smgDead1 + ' secondDead=' + smgE.dead);
+const smgDummy = makeTank(10, 14, 0, 'player', { invuln: 0 });
+mkHit(smgDummy);
+assert('冲锋枪：打到玩家仍是一击必死（低伤害只对敌人成立）',
+       smgDummy.dead === true, 'dead=' + smgDummy.dead);
+player.gun = 'smg'; player.ammo = 20;
+assert('冲锋枪：射击间隔压到 0.2 秒（fireK 0.5 × 基础 0.4s）',
+       Math.abs(fireCooldown(player) - 0.2) < 1e-9, 'cd=' + fireCooldown(player));
+player.gun = 'normal'; player.ammo = 0;
+
+/* 散弹枪：一次 5 发 */
+bullets.length = 0; player.gun = 'spread'; player.ammo = 12; player.power = 1; player.dir = 1;
+fireBullet(player);
+assert('散弹枪：一次齐射 5 发', bullets.length === 5, 'n=' + bullets.length);
+player.gun = 'normal'; player.ammo = 0;
+
+/* 火焰枪：致死传染半径 2 格（正好 2 格要算进来） */
+const burnSrc = makeTank(10, 10, 0, 'basic', { invuln: 0 });
+const burnNear = makeTank(11, 10, 0, 'basic', { invuln: 0 });
+const burnEdge = makeTank(12, 10, 0, 'basic', { invuln: 0 });
+const burnFar = makeTank(13, 10, 0, 'basic', { invuln: 0 });
+enemies = [burnSrc, burnNear, burnEdge, burnFar];
+spreadBurn(burnSrc);
+assert('火焰枪：致死传染覆盖 2 格内（边界 2 格也算），第 3 格不传染',
+       burnNear.burnT > 0 && burnEdge.burnT > 0 && burnFar.burnT === 0,
+       'near=' + burnNear.burnT + ' edge=' + burnEdge.burnT + ' far=' + burnFar.burnT);
+
+/* 钢板：基地外围砖 → 钢，25 秒后变回砖 */
+startGame();
+enemyQueue.length = 0; enemies.length = 0;
+let fortCell = null;
+for (let r = 22; r <= 25 && !fortCell; r++){
+  for (let c = 10; c <= 15; c++){ if (map[r][c] === BRICK){ fortCell = [r, c]; break; } }
+}
+assert('钢板：基地外围有砖墙可作为加固对象', !!fortCell, 'cell=' + JSON.stringify(fortCell));
+applyFortify();
+assert('钢板：外围砖被换成钢，计时 25 秒',
+       !!fortCell && map[fortCell[0]][fortCell[1]] === STEEL && fortifyT === 25,
+       'tile=' + (fortCell && map[fortCell[0]][fortCell[1]]) + ' t=' + fortifyT);
+tickFortify(25.1);
+assert('钢板：25 秒后变回砖（不是凭空消失）',
+       !!fortCell && map[fortCell[0]][fortCell[1]] === BRICK && fortifyT === 0,
+       'tile=' + (fortCell && map[fortCell[0]][fortCell[1]]) + ' t=' + fortifyT);
+
+/* 命数上限 8 */
+startGame();
+lives = 7;
+items.length = 0; items.push({ x:player.x, y:player.y, px:player.px, py:player.py, type:'tank', t:0 });
+collectItems();
+const livesOnce = lives;
+items.length = 0; items.push({ x:player.x, y:player.y, px:player.px, py:player.py, type:'tank', t:0 });
+collectItems();
+assert('坦克道具：命数上限为 8（原 6）',
+       livesOnce === 8 && lives === MAX_LIVES, 'after8=' + livesOnce + ' cap=' + MAX_LIVES);
+
+/* ---------- E. 子弹对撞（v1.6.10：同级互消，不同级时强弹无损） ---------- */
 startGame();
 enemyQueue.length = 0; enemies.length = 0; bullets.length = 0;
 for (let c = 0; c < COLS; c++) map[5][c] = 0;
 const E = makeTank(12, 5, 3, 'basic', {});
-/* 构造一对迎面对撞的子弹，跑到分出结果为止 */
+/* 构造一对迎面对撞的子弹，跑到分出结果为止（速度用真实公式，别写死） */
 function clash(pp, ep){
   bullets.length = 0;
-  bullets.push({ px:200, py:110, dir:1, speed:260, owner:player, dead:false, power:pp });
-  bullets.push({ px:260, py:110, dir:3, speed:240, owner:E,    dead:false, power:ep });
+  bullets.push({ px:200, py:110, dir:1, speed:bulletSpeed(player, pp), owner:player, dead:false, power:pp });
+  bullets.push({ px:260, py:110, dir:3, speed:bulletSpeed(E, ep),      owner:E,      dead:false, power:ep });
   for (let i = 0; i < 60 && bullets.filter(b => !b.dead).length > 1; i++) updateBullets(0.02);
   return bullets.filter(b => !b.dead);
 }
 let r = clash(1, 1);
 assert('E1 1v1 同归于尽', r.length === 0, '存活=' + r.length);
 r = clash(2, 2);
-assert('E2 2v2 同归于尽（新规则，原为穿透）', r.length === 0, '存活=' + r.length);
+assert('E2 2v2 同归于尽', r.length === 0, '存活=' + r.length);
 r = clash(3, 3);
 assert('E2b 3v3 同归于尽', r.length === 0, '存活=' + r.length);
 r = clash(2, 1);
-assert('E3 2v1 → 高级弹降为 1 级继续飞', r.length === 1 && r[0].power === 1 && r[0].owner === player,
+assert('E3 2v1 → 强弹无损存活（等级仍为 2，原规则会降到 1）',
+       r.length === 1 && r[0].power === 2 && r[0].owner === player,
        '存活=' + r.length + ' power=' + (r[0] && r[0].power));
 r = clash(3, 1);
-assert('E4 3v1 → 降为 2 级', r.length === 1 && r[0].power === 2, 'power=' + (r[0] && r[0].power));
+assert('E4 3v1 → 强弹仍为 3 级（原规则会降到 2）', r.length === 1 && r[0].power === 3,
+       'power=' + (r[0] && r[0].power));
 r = clash(3, 2);
-assert('E5 3v2 → 降为 1 级', r.length === 1 && r[0].power === 1, 'power=' + (r[0] && r[0].power));
+assert('E5 3v2 → 强弹仍为 3 级（原规则会降到 1）', r.length === 1 && r[0].power === 3,
+       'power=' + (r[0] && r[0].power));
 r = clash(3, 1);
-assert('E6 降级后速度按新等级重算（260+45=305）', r.length === 1 && Math.abs(r[0].speed - 305) < 1e-6,
+assert('E6 对撞不改变强弹速度（等级不变 → 速度不变）',
+       r.length === 1 && Math.abs(r[0].speed - bulletSpeed(player, 3)) < 1e-6,
        'speed=' + (r[0] && r[0].speed));
+/* 用户报的场景：1 级玩家弹撞 3 级敌弹，弱弹必须彻底无效 */
+r = clash(1, 3);
+assert('E10 1 级弹撞 3 级弹 → 弱弹消失、强弹等级与速度都不变',
+       r.length === 1 && r[0].power === 3 && r[0].owner === E &&
+       Math.abs(r[0].speed - bulletSpeed(E, 3)) < 1e-6,
+       '存活=' + r.length + ' power=' + (r[0] && r[0].power) + ' owner=' + (r[0] && (r[0].owner === E ? 'E' : 'P')));
 /* 同阵营互不干扰：否则 power3 的两发弹会自己撞自己，升级反而变成自我消耗 */
 bullets.length = 0;
 bullets.push({ px:200, py:110, dir:1, speed:260, owner:player, dead:false, power:3 });
@@ -175,7 +261,7 @@ for (let i = 0; i < 6; i++) updateBullets(0.02);
 assert('E7 同阵营子弹互不干扰', bullets.filter(b => !b.dead).length === 2 &&
        bullets[0].power === 3 && bullets[1].power === 1,
        '存活=' + bullets.filter(b => !b.dead).length);
-/* 一次交火最多被削一级 */
+/* 弹幕里连续交火：强弹也不会被削级（原规则靠 clashCd 限速，现在压根不降级） */
 bullets.length = 0;
 const many = [];
 for (let i = 0; i < 4; i++) many.push({ px:240 + i*9, py:110, dir:3, speed:240, owner:E, dead:false, power:1 });
@@ -183,8 +269,8 @@ bullets.push({ px:200, py:110, dir:1, speed:350, owner:player, dead:false, power
 bullets.push(...many);
 for (let i = 0; i < 20; i++) updateBullets(0.02);
 const surv = bullets.filter(b => !b.dead && b.owner === player);
-assert('E8 弹幕中一次交火最多被削一级（3 级不会瞬间掉到 1 级）',
-       surv.length === 0 || surv[0].power >= 2, 'power=' + (surv[0] && surv[0].power));
+assert('E8 连撞 4 发 1 级弹后，3 级弹仍为 3 级（不再降级）',
+       surv.length === 1 && surv[0].power === 3, 'power=' + (surv[0] && surv[0].power));
 /* 裸对象（无 gun/ang 字段）不抛异常 */
 bullets.length = 0;
 bullets.push({ px:200, py:110, dir:1, speed:260, owner:player, dead:false, power:1 });
@@ -250,9 +336,9 @@ assert('H1 敌人吃火力封顶 2 级（3 级会蒸干水塘）', EH.power === 
 EH.invuln = 0; give(EH, 'shield');
 assert('H2 敌人吃护盾 = 6 秒（玩家 12 秒）', Math.abs(EH.invuln - 6) < 1e-9, 'invuln=' + EH.invuln);
 freezePlayer = 0; give(EH, 'clock');
-assert('H3 敌人吃时钟 = 冻玩家 4 秒', Math.abs(freezePlayer - 4) < 1e-9, 'freezePlayer=' + freezePlayer);
+assert('H3 敌人吃时钟 = 冻玩家 5 秒', Math.abs(freezePlayer - 5) < 1e-9, 'freezePlayer=' + freezePlayer);
 EH.amphibious = 0; give(EH, 'amphibious');
-assert('H4 敌人吃两栖 = 20 秒', Math.abs(EH.amphibious - 20) < 1e-9, 'amph=' + EH.amphibious);
+assert('H4 敌人吃两栖 = 40 秒', Math.abs(EH.amphibious - 40) < 1e-9, 'amph=' + EH.amphibious);
 playerEagle = 0; give(EH, 'eagle');
 assert('H5 敌人吃老鹰退化为护盾，玩家不获得老鹰',
        Math.abs(EH.invuln - 6) < 1e-9 && playerEagle === 0, 'eagle=' + playerEagle);
@@ -956,7 +1042,7 @@ collectItems();
 const t12 = { speedT: player.speedT, mul: statusSpeedMul(player), speed: player.speed };
 assert('T12 拾取涡轮 → speedT=30（玩家）、移速 ×1.5，且不改 t.speed 本身',
        Math.abs(t12.speedT - SPEED_TIME) < 1e-9 && Math.abs(t12.mul - SPEED_MUL_P) < 1e-9 &&
-       t12Mul0 === 1 && Math.abs(t12.speed - 2.6) < 1e-9, JSON.stringify(t12));
+       t12Mul0 === 1 && Math.abs(t12.speed - PLAYER_SPEED) < 1e-9, JSON.stringify(t12));
 
 /* T12b 同样 6 帧、同样按键：加速后位移明显更远 */
 function t12Reset(st){
@@ -1202,6 +1288,193 @@ coarsePointer = uSavedCoarse;
 rotDismissed = false;
 rotTried = 0;
 syncRotateGate();
+
+/* ---------- V. 反向换向手感（adadad）----------
+ * 反向（左↔右 / 上↔下）必须沿原路平滑退回：交换起终点，绝不 snapToGrid。
+ * 修复前每次反向都 snapToGrid，把坦克从格中瞬移回格心 —— 快速 ADAD 时坦克
+ * 根本不前进、只在格心附近抽搐。V2 是防回退锁：换向期间 snapToGrid 必须为 0 次。 */
+function vArena(){
+  netMode = 'off'; player2 = null; paused = false;
+  startGame(); levelIntro = 0; freezePlayer = 0;
+  enemyQueue.length = 0; enemies.length = 0; bullets.length = 0; items.length = 0;
+  for (let r = 4; r < 22; r++) for (let c = 2; c < 24; c++) map[r][c] = EMPTY;
+  player.x = 12; player.y = 12;
+  player.px = 12*TILE + TILE/2; player.py = 12*TILE + TILE/2;
+  player.movingTo = null; player.pendingDir = null; player.dir = 3;
+  player.invuln = 999; player.dead = false; player.speed = PLAYER_SPEED;
+  for (const k in keys) delete keys[k];
+}
+function vMaxStep(xs, ys){
+  let m = 0;
+  for (let i = 1; i < xs.length; i++) m = Math.max(m, Math.abs(xs[i]-xs[i-1]), Math.abs(ys[i]-ys[i-1]));
+  return m;
+}
+/* 速度直接引用 PLAYER_SPEED，单帧位移上限随之自动同步 —— 写死数值会在调速后
+ * 把正常位移误判成「瞬移」（v1.6.6 提速时踩过一次）。 */
+const V_DT = 1/60, V_STEP = PLAYER_SPEED * TILE * V_DT, V_CAP = V_STEP * 2.05;   // 上限含「到达格心补齐剩余距离」
+
+vArena();
+const vx1 = [], vy1 = [];
+keys.ArrowLeft = true;
+for (let i = 0; i < 6; i++){ updatePlayer(V_DT); vx1.push(player.px); vy1.push(player.py); }
+keys.ArrowLeft = false; keys.KeyD = true;
+for (let i = 0; i < 10; i++){ updatePlayer(V_DT); vx1.push(player.px); vy1.push(player.py); }
+assert('V1 反向（左→右）沿原路平滑退回，无格心瞬移', vMaxStep(vx1, vy1) <= V_CAP && player.px > vx1[5],
+       'maxStep=' + vMaxStep(vx1, vy1).toFixed(2) + '/上限' + V_CAP.toFixed(2) + ' px=' + vx1[5].toFixed(1) + '→' + player.px.toFixed(1));
+
+vArena();
+let vSnaps = 0;
+const vOrigSnap = snapToGrid;
+snapToGrid = function(t){ vSnaps++; return vOrigSnap(t); };
+const vx2 = [], vy2 = [];
+let vTurn = 0;
+for (let i = 0; i < 20; i++){
+  keys.ArrowLeft = (vTurn === 0); keys.KeyD = (vTurn === 1);
+  vTurn ^= 1;
+  for (let f = 0; f < 4; f++){ updatePlayer(V_DT); vx2.push(player.px); vy2.push(player.py); }
+}
+snapToGrid = vOrigSnap;
+const vSpan = Math.max.apply(null, vx2) - Math.min.apply(null, vx2);
+assert('V2 ADAD×20 换向期间 snapToGrid 零调用（防回退锁）', vSnaps === 0, 'snaps=' + vSnaps);
+assert('V3 ADAD×20 全程无瞬移，且确实有往复位移', vMaxStep(vx2, vy2) <= V_CAP && vSpan > 3,
+       'maxStep=' + vMaxStep(vx2, vy2).toFixed(2) + ' 极差=' + vSpan.toFixed(2));
+
+/* 修反向不能把「垂直转向」改坏：横↔竖仍必须先对齐格心再换轴，否则斜漂/穿墙 */
+vArena();
+keys.ArrowLeft = true;
+for (let i = 0; i < 5; i++) updatePlayer(V_DT);
+keys.ArrowLeft = false; keys.ArrowUp = true;
+for (let i = 0; i < 30; i++) updatePlayer(V_DT);
+assert('V4 垂直转向（左→上）仍先对格心再换轴，换轴后 x 精确落格心',
+       player.dir === 0 && player.py < 12*TILE + TILE/2 &&
+       Math.abs(player.px - (Math.round((player.px - TILE/2)/TILE)*TILE + TILE/2)) < 1e-6,
+       'dir=' + player.dir + ' px=' + player.px.toFixed(2) + ' py=' + player.py.toFixed(2));
+
+/* 纵向同样成立（上→下）—— 注意只认 ArrowDown / KeyS */
+vArena();
+const vx3 = [], vy3 = [];
+keys.ArrowUp = true;
+for (let i = 0; i < 6; i++){ updatePlayer(V_DT); vx3.push(player.px); vy3.push(player.py); }
+keys.ArrowUp = false; keys.ArrowDown = true;
+for (let i = 0; i < 10; i++){ updatePlayer(V_DT); vx3.push(player.px); vy3.push(player.py); }
+assert('V5 纵向反向（上→下）同样无格心瞬移', vMaxStep(vx3, vy3) <= V_CAP,
+       'maxStep=' + vMaxStep(vx3, vy3).toFixed(2));
+
+/* 反向时原出发格被别的坦克占住 → 退回旧行为（snap），不崩、不挤进别人格子 */
+vArena();
+keys.ArrowLeft = true;
+for (let i = 0; i < 5; i++) updatePlayer(V_DT);
+enemies.push(makeTank(player.x, player.y, 2, 'basic', {}));
+let vCrash = null;
+try { keys.ArrowLeft = false; keys.KeyD = true; for (let i = 0; i < 20; i++) updatePlayer(V_DT); }
+catch(e){ vCrash = e.message; }
+assert('V6 原出发格被占时反向不崩溃（安全退回 snap 路径）', !vCrash, vCrash || 'ok');
+
+/* 反向必须「立即转」，不能被「反方向那一格有砖」误判成障碍 ——
+ * 长按某方向后突然反向「很钝」，就是这个 pendingDir 造成的（最多等 385ms）。 */
+vArena();
+map[12][13] = BRICK;                      // 反方向再远一格是砖（旧逻辑会探测到它）
+keys.ArrowLeft = true;
+for (let i = 0; i < 3; i++) updatePlayer(V_DT);
+keys.ArrowLeft = false; keys.KeyD = true;
+updatePlayer(V_DT);
+assert('V7 反方向那一格有砖时，反向仍立即转向（不被误判为障碍）',
+       player.dir === 1 && player.pendingDir === null,
+       'dir=' + player.dir + ' pending=' + player.pendingDir);
+
+/* 但垂直转向必须保留探测：上方有砖时不能硬转，要走 pendingDir 缓冲 */
+vArena();
+map[11][12] = BRICK;
+keys.ArrowLeft = true;
+for (let i = 0; i < 3; i++) updatePlayer(V_DT);
+keys.ArrowLeft = false; keys.ArrowUp = true;
+updatePlayer(V_DT);
+assert('V8 垂直转向上方有砖时仍走缓冲（不能因为修反向把探测一起短路）',
+       player.dir !== 0 && player.pendingDir === 0,
+       'dir=' + player.dir + ' pending=' + player.pendingDir);
+
+/* 30Hz 快照 → 60Hz 渲染：1.733px 的快照跳变必须被摊到多帧，不能一次跳满 */
+const sm = { px: 251.733, py: 250, rpx: 250, rpy: 250 };
+smoothRemoteTank(sm, V_DT);
+const smStep1 = sm.rpx - 250;
+for (let i = 0; i < 40; i++) smoothRemoteTank(sm, V_DT);
+assert('V9 房主坦克渲染插值：快照跳 1.73px 被摊薄到多帧并最终收敛',
+       smStep1 > 0.3 && smStep1 < 1.2 && Math.abs(sm.rpx - 251.733) < 0.1,
+       '首帧=' + smStep1.toFixed(3) + ' 收敛后=' + sm.rpx.toFixed(3));
+
+/* ---- B 组：v1.6.6 单人容错（B 档） ----
+ * 单人「过不去」的两个不公平点：跑不掉（玩家 2.6 vs fast 3.4）与无存档点（一局 25 关）。
+ * 命中几何（22x22 判定 + 240px/s 弹速）是原版手感，故意不动，所以这里不测。 */
+
+/* B1 跑不掉已修：快速兵只比玩家快一点点，玩家能拉距离 */
+const bFastMul = ETYPES.fast.speed / PLAYER_SPEED;
+assert('B1 快速兵相对玩家速度已收敛（≤1.12 倍，原 1.31 倍）',
+       bFastMul > 1 && bFastMul <= 1.12,
+       'fast=' + ETYPES.fast.speed + ' 玩家=' + PLAYER_SPEED + ' 倍数=' + bFastMul.toFixed(2));
+
+/* B2 预备命数 3 → 合计 4 条命（原 2 → 共 3 条） */
+netMode = 'off'; state = 'title'; startDiff = 1;
+startGame();
+const bLives0 = lives;
+assert('B2 新开一局：预备命数 3（合计 4 条命，原共 3 条）',
+       bLives0 === START_LIVES && START_LIVES === 3,
+       'lives=' + bLives0 + ' START_LIVES=' + START_LIVES);
+
+/* B3 复活无敌 2.5 秒：期间真的免疫伤害（不是只改数字） */
+levelIntro = 0; player.dead = false; player.invuln = RESPAWN_INVULN;
+const bHit = damageTank(player, 1, 'bullet');
+assert('B3 复活无敌 2.5 秒且真的免伤（原 2 秒，防连死雪崩）',
+       bHit === false && player.dead === false && RESPAWN_INVULN === 2.5,
+       'dmg=' + bHit + ' invuln=' + RESPAWN_INVULN);
+
+/* B4 续关：死在第 N 档 → 重开回到「该档第 1 关」，不再一路退回开局难度 */
+state = 'playing'; level = 12;                 // 12 = 精锐档（11~15）第 2 关
+gameOver();
+const bCp = checkpointLevel;
+startGame();                                   // state 此时为 'over' → 走续关分支
+assert('B4 死在第 3 档第 2 关后重开 → 从第 11 关（该档第 1 关）开始',
+       bCp === 11 && level === 11,
+       'checkpoint=' + bCp + ' level=' + level);
+
+/* B5 回标题页重新选难度 → 不续关（玩家明显想从头玩） */
+checkpointLevel = 11; startDiff = 2; state = 'title';
+startGame();
+assert('B5 从标题页重开不续关：回到所选难度第 1 关，续关点清零',
+       level === diffStartLevel(2) && checkpointLevel === 0,
+       'level=' + level + ' checkpoint=' + checkpointLevel);
+
+/* ---- v1.6.9 「继续本关」与次数上限（字母分组已被占满，这里直接用「续关 N」） ----
+ * 与「档位续关」区分：继续本关 = 原地重开同一关、保留分数、消耗次数；
+ * 重新开始 = 退回死亡所在难度档的第 1 关、分数清零、不消耗次数。 */
+netMode = 'off'; state = 'title'; startDiff = 1;
+startGame();
+const cSolo = continuesLeft;
+netMode = 'host'; state = 'title';
+startGame();
+const cCoop = continuesLeft;
+netMode = 'off';
+assert('续关1 配额：单人 5 次 / 双人 8 次',
+       cSolo === 5 && cCoop === 8, 'solo=' + cSolo + ' coop=' + cCoop);
+
+state = 'title'; netMode = 'off'; startDiff = 1;
+startGame();
+level = 7; score = 1234; lives = 0; lives2 = 0; continuesLeft = 3;
+state = 'over'; startLockT = 0;
+continueLevel();
+const cKeep = { lvl: level, score: score, lives: lives, left: continuesLeft, st: state };
+assert('续关2 继续本关：关卡不变、分数保留、命数补满、次数 -1',
+       cKeep.lvl === 7 && cKeep.score === 1234 && cKeep.lives === START_LIVES &&
+       cKeep.left === 2 && cKeep.st === 'playing', JSON.stringify(cKeep));
+
+state = 'over'; continuesLeft = 0; level = 9; startLockT = 0;
+continueLevel();
+const cEmpty = { lvl: level, st: state, left: continuesLeft };
+assert('续关3 次数用完：继续本关不生效（仍停在结束画面）',
+       cEmpty.lvl === 9 && cEmpty.st === 'over' && cEmpty.left === 0, JSON.stringify(cEmpty));
+
+state = 'over'; startGame();
+assert('续关4 重新开始会把续关次数补满（配额按「一局」算）',
+       continuesLeft === CONTINUE_LIMIT_SOLO, 'left=' + continuesLeft);
 
 netMode = 'off'; keys2 = {}; keys = {};
 `;

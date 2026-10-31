@@ -21,6 +21,7 @@ const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 const ROOT = __dirname;
 const RECONNECT_WINDOW = 20000;   // 掉线后保留房间与重连令牌的时长（毫秒）
@@ -118,6 +119,27 @@ function cacheControlFor(ext, base){
   if (base === 'sw.js' || ext === '.html' || ext === '.webmanifest') return 'no-cache';
   return 'public, max-age=3600';
 }
+/* ---- gzip 预压缩缓存 ----
+ * 首屏要传 game.js(196KB) + index.html(21KB) + style.css(19KB)，全是文本；
+ * 不压缩时手机上光传输就要一两秒，且每次刷新都重来。
+ * 这里按「路径 + mtime」缓存压缩结果，只在文件变化后重压一次；
+ * 图片 / wav 本身已是压缩格式，直接跳过，避免白烧 CPU。 */
+const GZ_EXT = new Set(['.html', '.js', '.css', '.json', '.webmanifest', '.svg', '.txt', '.map']);
+const GZ_MIN = 1024;
+const gzCache = new Map();
+function compressibleFor(ext, size){ return size >= GZ_MIN && GZ_EXT.has(ext); }
+function acceptsGzip(req){ return /\bgzip\b/i.test(String(req.headers['accept-encoding'] || '')); }
+function gzipFor(filePath, buf){
+  let mtimeMs = 0;
+  try { mtimeMs = fs.statSync(filePath).mtimeMs; } catch(e) { return null; }
+  const hit = gzCache.get(filePath);
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === buf.length) return hit.gz;
+  let gz = null;
+  try { gz = zlib.gzipSync(buf, { level: 9 }); } catch(e) { return null; }
+  if (gzCache.size > 64) gzCache.clear();     // 兜底：不给缓存无限生长
+  gzCache.set(filePath, { mtimeMs, size: buf.length, gz });
+  return gz;
+}
 /* 注意：本文件后面还有一个同名的 WebSocket 版发送函数（sendJson(sock,obj)）。
  * 函数声明会提升且后者覆盖前者，所以 HTTP 响应这条路径必须用独立名字，
  * 否则响应永远不会 end()，请求会一直挂着（曾经真实踩过这个坑）。 */
@@ -164,13 +186,19 @@ function handleRequest(req, res){
   fs.readFile(filePath, (err, buf) => {
     if (err){ res.writeHead(404); res.end('not found'); return; }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
+    const canGz = compressibleFor(ext, buf.length);
+    const gz = (canGz && acceptsGzip(req)) ? gzipFor(filePath, buf) : null;
+    const body = gz || buf;
+    const headers = {
       'Content-Type': MIME[ext] || 'application/octet-stream',
-      'Content-Length': buf.length,
+      'Content-Length': body.length,
       'Cache-Control': cacheControlFor(ext, path.basename(filePath)),
       'X-Content-Type-Options': 'nosniff',
-    });
-    res.end(req.method === 'HEAD' ? undefined : buf);
+    };
+    if (canGz) headers['Vary'] = 'Accept-Encoding';   // 同一 URL 有两种编码，必须声明
+    if (gz) headers['Content-Encoding'] = 'gzip';
+    res.writeHead(200, headers);
+    res.end(req.method === 'HEAD' ? undefined : body);
   });
 }
 

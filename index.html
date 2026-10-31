@@ -13,7 +13,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="坦克1998">
-<script src="assets/sounds.js" defer></script>
 <script src="net.js" defer></script>
 <script src="game.js" defer></script>
 </head>
@@ -79,7 +78,8 @@
   <button id="ca-start"   class="ca-btn primary wide">▶ 开始游戏</button>
   <button id="ca-next"    class="ca-btn primary wide">⏭ 下一关</button>
   <button id="ca-resume"  class="ca-btn primary wide">▶ 继续</button>
-  <button id="ca-restart" class="ca-btn primary wide">↻ 重新开始</button>
+  <button id="ca-continue" class="ca-btn primary wide">⏵ 继续本关</button>
+  <button id="ca-restart" class="ca-btn wide">↻ 重新开始</button>
   <button id="ca-coop"    class="ca-btn">👥 双人游戏</button>
   <button id="ca-codex"   class="ca-btn">📖 图鉴</button>
   <button id="ca-title"   class="ca-btn">🏠 返回标题</button>
@@ -111,7 +111,7 @@
         <div class="cx-row"><span class="cx-badge" style="background:#FF6A00;color:#fff">F</span><div>
           <div class="cx-name">火焰枪 <span class="cx-tag" style="background:#FF6A00">火</span></div>
           <div class="cx-meta">弹药 15 · 弹速 0.9×</div>
-          <div class="cx-desc">命中点燃，持续灼烧掉血；燃烧致死会传染给 1 格内敌人（最多 2 代、伤害减半）。玩家被烧不掉血，改为枪管过热。</div>
+          <div class="cx-desc">命中点燃，持续灼烧掉血；燃烧致死会传染给 <b>2 格内</b>敌人（最多 2 代、伤害减半）。玩家被烧不掉血，改为枪管过热。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#7FD0FF;color:#0d1117">C</span><div>
           <div class="cx-name">冷冻枪 <span class="cx-tag" style="background:#7FD0FF;color:#0d1117">冰</span></div>
@@ -126,7 +126,12 @@
         <div class="cx-row"><span class="cx-badge" style="background:#FFD23F;color:#0d1117">S</span><div>
           <div class="cx-name">散弹枪 <span class="cx-tag" style="background:#FFD23F;color:#0d1117">散</span></div>
           <div class="cx-meta">弹药 12 · 弹速 1.0×</div>
-          <div class="cx-desc">一次齐射 3 发 ±22° 扇形，只扣 1 次弹药；专门绕开「同屏弹数=火力等级」上限，卖点是覆盖面。</div>
+          <div class="cx-desc">一次齐射 <b>5 发</b>（±30° 扇形），只扣 1 次弹药；专门绕开「同屏弹数=火力等级」上限，卖点是覆盖面。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#B8E986;color:#0d1117">M</span><div>
+          <div class="cx-name">冲锋枪 <span class="cx-tag" style="background:#B8E986;color:#0d1117">冲</span></div>
+          <div class="cx-meta">弹药 20 · 弹速 2.0× · 伤害 0.5</div>
+          <div class="cx-desc">弹速翻倍、射击间隔压到 <b>0.2 秒</b>（普通枪 0.4 秒），但每发只有半伤 —— 1 血敌人要两枪。赢在压制与手感，不赢在单发伤害。敌军不会使用（半伤打到只有 1 血的玩家太便宜）。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#46B455;color:#fff">H</span><div>
           <div class="cx-name">追踪弹 <span class="cx-tag" style="background:#46B455">追</span></div>
@@ -152,7 +157,7 @@
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#FF6A3D;color:#fff">💣</span><div>
           <div class="cx-name">手雷</div>
-          <div class="cx-desc">玩家拾取 → 清屏所有敌人并加分；敌人拾取 → 在脚下埋雷（红圈预警，3 格半径）。</div>
+          <div class="cx-desc">玩家拾取 → 清屏所有敌人并加分；敌人拾取 → 在脚下埋雷（<b>无预警</b>，1 秒后引爆，3 格半径）。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#4FD1E0;color:#0d1117">🛡</span><div>
           <div class="cx-name">护盾</div>
@@ -160,23 +165,27 @@
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#B14BFF;color:#fff">⏱</span><div>
           <div class="cx-name">时钟</div>
-          <div class="cx-desc">冻结敌方 10 秒；敌人吃了则冻玩家 4 秒。</div>
+          <div class="cx-desc">冻结敌方 10 秒；敌人吃了则冻玩家 <b>5 秒</b>。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#46B455;color:#fff">🟢</span><div>
           <div class="cx-name">坦克</div>
-          <div class="cx-desc">加 1 条命（上限 6）；敌人吃了则增援。</div>
+          <div class="cx-desc">加 1 条命（上限 <b>8</b>）；敌人吃了则增援。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#7FD0FF;color:#0d1117">🌊</span><div>
           <div class="cx-name">两栖</div>
-          <div class="cx-desc">可水上行走：玩家 60 秒 / 敌人 20 秒。</div>
+          <div class="cx-desc">可水上行走：玩家 60 秒 / 敌人 <b>40 秒</b>。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#5BE37A;color:#0d1117">⚡</span><div>
           <div class="cx-name">涡轮加速</div>
           <div class="cx-desc">移速 ×1.5、持续 <b>30 秒</b>；敌人拾取则 ×1.3、12 秒，<b>快速兵</b>例外 —— 速度 +0.75 格/秒、15 秒（它本就最快，走绝对加成免得无解）。期间坦克旁显示绿色 <b>»</b> 标记，面板显示剩余秒数；与「减速」同时存在时两者相乘、互相抵消一部分。</div>
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#FFC300;color:#0d1117">🦅</span><div>
-          <div class="cx-name">老鹰</div>
-          <div class="cx-desc">基地/玩家 60 秒无敌（重复拾取重置计时器，不叠加）；敌方退化成 6 秒护盾。</div>
+          <div class="cx-name">老鹰 · 基地复活甲</div>
+          <div class="cx-desc">获得 <b>1 次</b>复活甲：基地被打爆时<b>不结束游戏</b>，3 秒后自动修复并恢复 4 格基地。一次性消耗，重复拾取只刷新次数不叠加。</div>
+        </div></div>
+        <div class="cx-row"><span class="cx-badge" style="background:#C7CDD4;color:#0d1117">🛡</span><div>
+          <div class="cx-name">钢板</div>
+          <div class="cx-desc">把基地外围的砖墙临时换成 <b>钢板</b>，持续 <b>25 秒</b>后变回砖。1 级弹打不穿钢板，只有 2 级火力能凿开；期间被打穿的格子不会在恢复时凭空长回来。</div>
         </div></div>
       </div>
       <!-- 敌人 -->
@@ -244,7 +253,7 @@
         </div></div>
         <div class="cx-row"><span class="cx-badge" style="background:#FFC300;color:#0d1117">鹰</span><div>
           <div class="cx-name">基地老鹰</div>
-          <div class="cx-desc">被击中即游戏结束；可用「老鹰」道具保 60 秒无敌。老鹰 2×2 格，始终完整绘制。</div>
+          <div class="cx-desc">被击中即游戏结束；持「老鹰」道具时获得 1 次复活甲，被打爆后 3 秒自动修复。老鹰 2×2 格，始终完整绘制。</div>
         </div></div>
       </div>
     </div>

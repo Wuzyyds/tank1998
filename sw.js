@@ -4,10 +4,14 @@
  *   - 在线时始终拿最新代码，并顺手写入缓存
  *   - 离线时用缓存渲染，实现可安装 + 离线可玩
  * 发布新版本时请提升 VERSION，旧缓存会在 activate 阶段清理。
+ *
+ * ⚠️ SHELL 里**故意不放** assets/sounds.js：那是 13 个 wav 的 base64 兜底包（约 190KB），
+ * 只有「.wav 取不到」时才会被 game.js 按需注入。放进预缓存清单等于每次安装都白拉一遍，
+ * 按需加载就白做了。离线时的音效由运行时缓存下来的 .wav 负责（fetch 处理器会顺手缓存）。
  * ========================================================= */
 'use strict';
 
-const VERSION = 'tank1998-v1.6.4';
+const VERSION = 'tank1998-v1.7.0';
 const SHELL = [
   './',
   './index.html',
@@ -15,7 +19,6 @@ const SHELL = [
   './game.js',
   './net.js',
   './manifest.webmanifest',
-  './assets/sounds.js',
   './assets/icons/icon-192.png',
   './assets/icons/icon-512.png',
 ];

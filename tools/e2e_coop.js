@@ -59,6 +59,7 @@ GET = function(){ return {
   keys2: JSON.parse(JSON.stringify(keys2)),
   p2bullets: bullets.filter(function(b){ return b.owner === player2 || (b.owner && b.owner.tag === 2); }).length,
   pred: predBullets.length,
+  continues: continuesLeft,
 }; };
 SANDBOX_OUT = [];
 `;
@@ -303,6 +304,28 @@ function waitMsg(sb, pred, timeout = 2000){
     await run(20);
     A('E17 客方松手后曳光弹归零（本地预测不会自己持续开火 / 不留残影）',
       guest.get().pred === 0, 'pred=' + guest.get().pred);
+
+    /* 9. v1.6.9 续关：房主死亡后，客方点「继续本关」→ 房主原地重开同一关（关卡不倒退）。
+     *    这是联机里唯一一条「客方发起、房主执行、再靠快照同步回来」的状态迁移，最容易出岔。 */
+    const lvlBefore = host.get().level;
+    const leftBefore = host.get().continues;
+    vm.runInContext('destroyBase()', host.context);
+    A('E18 基地被毁 → 房主进入结束画面', host.get().state === 'over', 'state=' + host.get().state);
+
+    await run(10);
+    A('E19 客方也看到结束画面（纯快照驱动，不各自为政）',
+      guest.get().state === 'over', 'guest state=' + guest.get().state);
+
+    await run(60);      // 越过 startLockT 的 0.8 秒误触保护
+    vm.runInContext('requestContinue()', guest.context);
+    await run(12);
+    const hC = host.get(), gC = guest.get();
+    A('E20 客方请求续关 → 房主原地重开同一关（关卡不倒退），客方同步跟上',
+      hC.state === 'playing' && hC.level === lvlBefore && gC.state === 'playing' && gC.level === lvlBefore,
+      'lvl ' + lvlBefore + '->' + hC.level + ' host=' + hC.state + ' guest=' + gC.level + '/' + gC.state);
+    A('E21 续关只消耗 1 次配额，且客方看到同一个剩余次数',
+      leftBefore - hC.continues === 1 && gC.continues === hC.continues,
+      'host ' + leftBefore + '->' + hC.continues + ' guest=' + gC.continues);
 
   } catch (e) {
     A('端到端执行无异常', false, (e && e.message) || String(e));
