@@ -23,7 +23,6 @@ const KILL_BONUS_EVERY = 3;  // 每 N 杀保底掉落
 const AMPHIBIOUS_TIME = 60;  // 水陆两栖 60 秒
 const SHIELD_TIME     = 12;
 const FREEZE_TIME     = 10;
-const EAGLE_TIME      = 60;  // 老鹰：无敌 60 秒（重复拾取重置计时器，不叠加）
 /* ---- 涡轮加速（v1.6.2 新增道具）：给「走得快」补一个正反馈 ----
  * 玩家基础 2.6 格/秒 × 1.5 = 3.9 格/秒 —— 快过最快的「快速兵」（3.4）；
  * 走一格从 385ms 缩到 256ms，切进口 / 绕后 / 抢道具的差别一眼能看出来。
@@ -104,14 +103,17 @@ const MAX_LIVES       = 8;      // 命数上限（「坦克」道具与得分奖
 const CONTINUE_LIMIT_SOLO = 5;
 const CONTINUE_LIMIT_COOP = 8;
 
+/* atk = 攻击方式，决定开火模式与坦克下方那个标记（见 drawAtkMark）。
+ * 原先所有敌人都是「单发 + 不同射速」，所谓「火力兵连发」并不存在 —— v1.7.2 才真正实现。 */
 const ETYPES = {
-  basic: { speed:1.6, hp:1, score:100, fire:2.4, body:'#C8CCD2', dark:'#6B7178' },
-  fast:  { speed:3.05, hp:1, score:200, fire:2.8, body:'#7FD0FF', dark:'#2E7BB0' },
-  power: { speed:2.1, hp:2, score:300, fire:1.3, body:'#FF8A6B', dark:'#B03E20' },
-  armor: { speed:1.2, hp:4, score:400, fire:3.2, body:'#F0F0F0', dark:'#A8A8A8' },
-  bonus: { speed:2.2, hp:1, score:500, fire:1.8, body:'#FF3B30', dark:'#8E1B14' }, // 红色道具敌人
-  boss:  { speed:1.05, hp:10, score:2000, fire:0.9, body:'#B14BFF', dark:'#5B2185' }, // BOSS 关首领
+  basic: { speed:1.6, hp:1, score:100, fire:2.4, body:'#C8CCD2', dark:'#6B7178', atk:'single' },
+  fast:  { speed:3.05, hp:1, score:200, fire:2.8, body:'#7FD0FF', dark:'#2E7BB0', atk:'single' },
+  power: { speed:2.1, hp:2, score:300, fire:1.3, body:'#FF8A6B', dark:'#B03E20', atk:'burst2' },
+  armor: { speed:1.2, hp:4, score:400, fire:3.2, body:'#F0F0F0', dark:'#A8A8A8', atk:'heavy' },
+  bonus: { speed:2.2, hp:1, score:500, fire:1.8, body:'#FF3B30', dark:'#8E1B14', atk:'single' }, // 红色道具敌人
+  boss:  { speed:1.05, hp:10, score:2000, fire:0.9, body:'#B14BFF', dark:'#5B2185', atk:'burst3' }, // BOSS 关首领
 };
+const BURST_GAP = 0.13;   // 连发间隔（秒）：一次触发连打 2~3 颗，肉眼能看出「哒哒」而不是同时喷出
 
 /* ================= 难度阶梯（每 5 关一档） =================
  * 旧实现是一条平滑曲线：速度 ×1.6 封顶、每 3 关 +1 血封顶 +2、AI 命中率 0.92 封顶，
@@ -179,23 +181,25 @@ const GUNS = {
   normal: { name:'普通弹', color:'#FFE88A', ammo:0,  speedK:1.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:0, spread:0 },
   flame:  { name:'火焰枪', color:'#FF6A00', ammo:15, speedK:0.90, pierce:0, brickPierce:0, burn:1, slow:0, homing:0, chain:0, spread:0 },
   frost:  { name:'冷冻枪', color:'#7FD0FF', ammo:12, speedK:1.10, pierce:0, brickPierce:0, burn:0, slow:1, homing:0, chain:0, spread:0 },
-  laser:  { name:'激光枪', color:'#B14BFF', ammo:10, speedK:1.60, pierce:3, brickPierce:2, burn:0, slow:0, homing:0, chain:0, spread:0 },
+  /* 爆炸激光枪（v1.7.2 合并了原「穿甲钻」）：穿透 3 / 破墙 2 / 弹速 1.25× / 弹药 10，
+   * 命中后对落点 1 格内的其它敌人再造成 1 点伤害（blast = 1 格）。
+   * 原 laser 与 drill 的生态位几乎重合（穿透同为 3，只有破墙 2 vs 4、弹速 1.6 vs 1.15 的差别），
+   * 玩家实际感知不到两者区别 —— 合并成一个，腾出一个武器位。 */
+  laser:  { name:'爆炸激光枪', color:'#B14BFF', ammo:10, speedK:1.25, pierce:3, brickPierce:2, burn:0, slow:0, homing:0, chain:0, spread:0, blast:1 },
   spread: { name:'散弹枪', color:'#FFD23F', ammo:12, speedK:1.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:0, spread:5 },
   homing: { name:'追踪弹', color:'#46B455', ammo:8,  speedK:0.85, pierce:0, brickPierce:0, burn:0, slow:0, homing:1, chain:0, spread:0 },
   tesla:  { name:'电磁链', color:'#4FD1E0', ammo:10, speedK:1.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:3, spread:0 },
-  drill:  { name:'穿甲钻', color:'#C7CDD4', ammo:10, speedK:1.15, pierce:3, brickPierce:4, burn:0, slow:0, homing:0, chain:0, spread:0 },
   /* 冲锋枪：走「高射速 + 低伤害」。dmg 0.5 表示对 1 血敌人要两枪，
    * fireK 0.5 把射击间隔从 0.4s 压到 0.2s。对玩家恒 1 血伤害（见 applyHit）。 */
   smg:    { name:'冲锋枪', color:'#B8E986', ammo:20, speedK:2.00, pierce:0, brickPierce:0, burn:0, slow:0, homing:0, chain:0, spread:0, dmg:0.5, fireK:0.5 },
 };
-const WEAPON_TYPES  = ['flame','frost','laser','spread','homing','tesla','drill','smg'];
-const WEAPON_WEIGHT = [18, 17, 12, 14, 8, 9, 7, 15];   // 总 100（8 种）
+const WEAPON_TYPES  = ['flame','frost','laser','spread','homing','tesla','smg'];
+const WEAPON_WEIGHT = [20, 18, 14, 15, 9, 9, 15];   // 总 100（7 种；v1.7.2 起 drill 并入 laser）
 const WEAPON_RING = { flame:'#FF6A00', frost:'#7FD0FF', laser:'#B14BFF',
-                      spread:'#FFD23F', homing:'#46B455', tesla:'#4FD1E0', drill:'#C7CDD4',
-                      smg:'#B8E986' };
+                      spread:'#FFD23F', homing:'#46B455', tesla:'#4FD1E0', smg:'#B8E986' };
 /* 武器道具的字母标识：地图上的武器格子直接显示字母，比矢量小图标更快辨认
  * F火焰枪 C冷冻枪 L激光枪 S散弹枪 H追踪弹 T电磁链 D穿甲钻 */
-const WEAPON_LETTER = { flame:'F', frost:'C', laser:'L', spread:'S', homing:'H', tesla:'T', drill:'D', smg:'M' };
+const WEAPON_LETTER = { flame:'F', frost:'C', laser:'L', spread:'S', homing:'H', tesla:'T', smg:'M' };
 const CLASSIC_POOL_RATE = 0.5;   // 经典道具池占比（武器占 50%，保证玩家能频繁见到武器）
 const WEAPON_UNLOCK_LEVEL = 1;   // 所有关卡均可能掉落武器（不再限制第 2 关起）
 /* 追踪弹敌军禁用（追踪 + 一击必死过于劝退）。
@@ -961,7 +965,6 @@ let player = null, enemies = [], bullets = [], items = [], explosions = [];
 let predBullets = [];
 let enemyQueue = [], spawnTimer = 0, killCount = 0;
 let freezeEnemies = 0, freezePlayer = 0, baseAlive = true, overReason = '';
-let playerEagle = 0;        // 老鹰无敌剩余时间（秒）
 let levelIntro = 0;         // FC 经典幕布开场剩余时间（秒）
 const LEVEL_INTRO_TIME = 1.6;
 let startLockT = 0;         // 结束/过关后的误触保护：此时间点前忽略“开始”请求
@@ -1164,10 +1167,11 @@ function bulletSpeed(owner, power){
 /* 朝向 → 弧度：dir 0=上(-PI/2) 1=右(0) 2=下(PI/2) 3=左(PI) */
 function angFor(dir){ return dir * Math.PI / 2 - Math.PI / 2; }
 
-function fireBullet(t){
+function fireBullet(t, spdMul){
   const d = DIRS[t.dir];
   const power = t.power || 1;
-  const spd = bulletSpeed(t, power);
+  /* spdMul：给只用弹速体现威胁的兵种（重甲兵）用；不改 power，避免动到子弹尺寸与破墙等级 */
+  const spd = bulletSpeed(t, power) * (spdMul || 1);
   // 弹药耗尽自动退回普通弹
   if (t.gun && t.gun !== 'normal' && t.ammo <= 0){ t.gun = 'normal'; t.ammo = 0; }
   const useGun = (t.gun && t.gun !== 'normal' && t.ammo > 0) ? t.gun : 'normal';
@@ -1414,11 +1418,6 @@ function updatePlayer(dt){
     return;
   }
   tickStatus(player, dt);   // 统一衰减：invuln / amphibious / burn / slow / overheat / hitFlash
-  /* 老鹰无敌倒计时：按真实时间递减，并与 invuln 保持同步 */
-  if (playerEagle > 0){
-    playerEagle = Math.max(0, playerEagle - dt);
-    if (player.invuln < playerEagle) player.invuln = playerEagle;
-  }
   if (freezePlayer > 0) return;   // 被时钟冻结：不动也不能射
 
   drivePlayerTank(player, keys, dt);
@@ -1446,11 +1445,6 @@ function updatePlayer2(dt){
     return;
   }
   tickStatus(player2, dt);
-  /* 老鹰无敌倒计时：与玩家1 同步保护 */
-  if (playerEagle > 0){
-    playerEagle = Math.max(0, playerEagle - dt);
-    if (player2.invuln < playerEagle) player2.invuln = playerEagle;
-  }
   if (freezePlayer > 0) return;
 
   drivePlayerTank(player2, keys2, dt);
@@ -1475,10 +1469,27 @@ function updateEnemy(e, dt){
     if (e.aiT <= 0) enemyThink(e);
   }
   updateTankMove(e, dt);
-  e.fireT -= dt;
-  if (e.fireT <= 0 && countBullets(e) < (e.power || 1)){
-    if (Math.random() < 0.78) fireBullet(e);
-    e.fireT = e.fire * (0.6 + Math.random() * 0.9) * (e.slowT > 0 ? SLOW_FIRE_E : 1);
+  /* 攻击方式（v1.7.2）：
+   *   single 单发（普通兵 / 速度兵 / 道具兵）
+   *   burst2 两连发（火力兵）、burst3 三连发（BOSS）—— 连发期间无视「同屏弹数」上限，
+   *          因为那是「持续压制」的上限，不该掐掉一次齐射内部的后续子弹
+   *   heavy  重弹（重甲兵）—— 去掉 22% 空枪率 + 弹速 ×1.15，压迫感来自「躲不掉」而不是伤害
+   *          （刻意不抬高 power：power 会改子弹尺寸与破墙等级，会破坏「钢墙是绝对掩体」） */
+  if (e.burstLeft > 0){
+    e.burstT -= dt;
+    if (e.burstT <= 0){ e.burstT = BURST_GAP; e.burstLeft--; fireBullet(e); }
+  } else {
+    e.fireT -= dt;
+    if (e.fireT <= 0 && countBullets(e) < (e.power || 1)){
+      const atk = (ETYPES[e.kind] || ETYPES.basic).atk || 'single';
+      const burst = atk === 'burst3' ? 3 : (atk === 'burst2' ? 2 : 1);
+      const sure = atk === 'heavy' ? 1 : 0.78;
+      if (Math.random() < sure){
+        fireBullet(e, atk === 'heavy' ? 1.15 : 0);
+        if (burst > 1){ e.burstLeft = burst - 1; e.burstT = BURST_GAP; }
+      }
+      e.fireT = e.fire * (0.6 + Math.random() * 0.9) * (e.slowT > 0 ? SLOW_FIRE_E : 1);
+    }
   }
 }
 
@@ -1588,6 +1599,23 @@ function applyHit(b, t){
   /* 冲锋枪 dmg=0.5：对 1 血敌人要两枪。玩家侧恒为 1 —— 玩家只有 1 血，
    * 半伤会变成「挨两枪才死」，等于白送一条命。 */
   damageTank(t, (t.isPlayer ? 1 : (g.dmg || 1)), 'bullet');
+  /* 爆炸激光枪：落点 1 格内的其它敌人再吃 1 点伤害（主目标不重复计算）。
+   * 先把目标收进数组再结算 —— damageTank 会改写 enemies，边遍历边删会漏人。 */
+  if (g.blast && b.owner){
+    const R = TILE * g.blast;
+    addExplosion(t.px, t.py, 'spark');
+    const hit = [];
+    if (b.owner.isPlayer){
+      for (const e of enemies){
+        if (e === t || e.dead) continue;
+        if (Math.abs(e.px - t.px) <= R && Math.abs(e.py - t.py) <= R) hit.push(e);
+      }
+    } else {
+      if (player && player !== t && !player.dead && Math.abs(player.px - t.px) <= R && Math.abs(player.py - t.py) <= R) hit.push(player);
+      if (player2 && player2 !== t && !player2.dead && Math.abs(player2.px - t.px) <= R && Math.abs(player2.py - t.py) <= R) hit.push(player2);
+    }
+    for (const x of hit) if (!x.dead) damageTank(x, 1, 'bullet');
+  }
   if (b.pierceLeft > 0){                 // 激光 / 穿甲钻：贯穿
     b.pierceLeft--;
     if (!b.hitIds) b.hitIds = [];
@@ -1849,6 +1877,15 @@ function gameOver(){
 
 /* 两层掉落池：武器直接并入会稀释火力成长（star 22% → 13%），
  * 改为经典池 50% / 武器池 50%，所有关卡均可能掉落武器。 */
+/* 两栖权重按主题浮动：水域占比从沙漠 1.4% 到沼泽 4.5% 差了 3 倍，
+ * 固定权重 17 会让沙漠图反复掉一个几乎用不上的道具。 */
+const AMPHIB_W_BY_THEME = { '草原': 14, '沙漠': 6, '雪原': 16, '沼泽': 22, '钢铁': 12 };
+function itemWeightAt(i){
+  if (ITEM_TYPES[i] === 'amphibious' && Object.prototype.hasOwnProperty.call(AMPHIB_W_BY_THEME, levelThemeName)){
+    return AMPHIB_W_BY_THEME[levelThemeName];
+  }
+  return ITEM_WEIGHT[i];
+}
 function rollItemType(){
   if (level >= WEAPON_UNLOCK_LEVEL && Math.random() > CLASSIC_POOL_RATE){
     let total = WEAPON_WEIGHT.reduce((a, b) => a + b, 0), r = Math.random() * total;
@@ -1857,10 +1894,12 @@ function rollItemType(){
       if (r <= 0) return WEAPON_TYPES[i];
     }
   }
-  let total = ITEM_WEIGHT.reduce((a, b) => a + b, 0), r = Math.random() * total;
+  let total = 0;
+  for (let i = 0; i < ITEM_TYPES.length; i++) total += itemWeightAt(i);
+  let r = Math.random() * total;
   let type = 'star';
   for (let i = 0; i < ITEM_TYPES.length; i++){
-    r -= ITEM_WEIGHT[i];
+    r -= itemWeightAt(i);
     if (r <= 0){ type = ITEM_TYPES[i]; break; }
   }
   return type;
@@ -2084,7 +2123,6 @@ function startLevel(fresh){
   fortifyT = 0; fortifyCells.length = 0; baseRevive = 0; baseReviveT = 0;
   killCount = 0;
   freezeEnemies = 0; freezePlayer = 0;
-  playerEagle = 0;
   levelIntro = LEVEL_INTRO_TIME;   // 幕布开场
   baseAlive = true;
   const carryPower = (!fresh && player && !player.dead) ? (player.power || 1) : 1;   // 下一关继承；重开一局则重置为 1
@@ -2459,17 +2497,21 @@ function drawHealthBar(t, cx, cy){
  *   1 点 = 快速兵   2 点 = 火力兵   3 点 = 装甲兵
  * 普通兵无点；道具兵已有 ★；首领已有皇冠——四类标记互斥，不会堆在一起。
  * 用中性亮色 + 深色底托，保证在雪地/沙漠等亮地形上同样可读。 */
-const KIND_PIPS = { fast: 1, power: 2, armor: 3 };
+/* 攻击方式标记（v1.7.2，取代原来的「兵种点数」）。
+ * 原来只有 fast/power/armor 有点、basic/bonus/boss 什么都不画，看着像漏渲染；
+ * 现在**所有敌人**都画，图形直接说明它怎么开火：
+ *   单发 = 1 道细条 / 重弹 = 1 道粗条 / 两连发 = 2 道 / 三连发 = 3 道 */
+const ATK_MARK = { single:{ n:1, w:2 }, heavy:{ n:1, w:6 }, burst2:{ n:2, w:2 }, burst3:{ n:3, w:2 } };
 const PIP_SIZE = 3, PIP_GAP = 2;
-const KIND_PIP_Y = 15;    // 点带在坦克下方（精灵底边约 cy+13.5）
-const AMPHIB_Y   = 22;    // 两栖标记带，位于点带之下（点带占 14~19）
-function drawKindPips(t, cx, cy){
-  const n = KIND_PIPS[t.kind];
-  if (!n) return;
-  const total = n * PIP_SIZE + (n - 1) * PIP_GAP;
+const KIND_PIP_Y = 15;    // 标记带在坦克下方（精灵底边约 cy+13.5）
+const AMPHIB_Y   = 22;    // 两栖标记带，位于标记带之下（标记带占 14~19）
+function atkOf(t){ return (ETYPES[t.kind] || ETYPES.basic).atk || 'single'; }
+function drawAtkMark(t, cx, cy){
+  const m = ATK_MARK[atkOf(t)] || ATK_MARK.single;
+  const total = m.n * m.w + (m.n - 1) * PIP_GAP;
   const x0 = cx - total / 2, y = cy + KIND_PIP_Y;
   px(x0 - 1, y - 1, total + 2, PIP_SIZE + 2, '#0B0D10');   // 深色底托 → 亮地形上也有对比
-  for (let i = 0; i < n; i++) px(x0 + i * (PIP_SIZE + PIP_GAP), y, PIP_SIZE, PIP_SIZE, '#EDEFF2');
+  for (let i = 0; i < m.n; i++) px(x0 + i * (m.w + PIP_GAP), y, m.w, PIP_SIZE, '#EDEFF2');
 }
 
 function drawTank(t){
@@ -2613,7 +2655,7 @@ function drawTank(t){
     px(cx + 3, cy - 33, 6, 2, '#D9A9FF');
   }
   // 兵种识别标记（色盲友好）
-  drawKindPips(t, cx, cy);
+  drawAtkMark(t, cx, cy);
   // 水陆两栖标注（下移到兵种点下方，避免两条标记带叠在一起）
   if (t.amphibious > 0){
     px(cx - 6, cy + AMPHIB_Y, 12, 2, '#7FD0FF');
@@ -3061,8 +3103,7 @@ function drawPanel(){
   const pT = isCoopPanel ? 'P1 ' : '', qT = 'P2 ', p2Alive = isCoopPanel && player2 && !player2.dead;
   if (freezeEnemies > 0) st('冻敌 ' + freezeEnemies.toFixed(1), '#7FD0FF');
   if (freezePlayer > 0) st('冻我 ' + freezePlayer.toFixed(1), '#FF8A6B');
-  if (player && playerEagle > 0) st('老鹰 ' + playerEagle.toFixed(1), '#FFC300');
-  else if (player && player.invuln > 2.5) st(pT + '护盾 ' + player.invuln.toFixed(1), '#7FD0FF');
+  if (player && player.invuln > 2.5) st(pT + '护盾 ' + player.invuln.toFixed(1), '#7FD0FF');
   if (p2Alive && player2.invuln > 2.5) st(qT + '护盾 ' + player2.invuln.toFixed(1), '#7FD0FF');
   if (player && player.amphibious > 0) st(pT + '两栖 ' + player.amphibious.toFixed(1), '#7FD0FF');
   if (p2Alive && player2.amphibious > 0) st(qT + '两栖 ' + player2.amphibious.toFixed(1), '#7FD0FF');
@@ -3339,7 +3380,7 @@ function serializeSnapshot(){
   const snap = {
     seq: ++snapSeq,
     s: state, lvl: level, score: score, lives: lives, lives2: lives2,
-    fe: freezeEnemies, fp: freezePlayer, pe: playerEagle, li: levelIntro, base: baseAlive ? 1 : 0,
+    fe: freezeEnemies, fp: freezePlayer, li: levelIntro, base: baseAlive ? 1 : 0,
     pz: paused ? 1 : 0,   // 暂停状态兜底：pause 消息丢包时，恢复正常发快照的第一帧即可纠偏
     cg: continuesLeft,    // 剩余续关次数：客方按钮要显示同一个数字，用完了要一起藏起来
     p: tankArr(player),
@@ -3366,7 +3407,7 @@ function applySnapshot(s){
   if (!s) return;
   state = s.s; level = s.lvl; score = s.score; lives = s.lives; lives2 = s.lives2;
   nextExtraLifeScore = (Math.floor(score / 2000) + 1) * 2000;
-  freezeEnemies = s.fe; freezePlayer = s.fp; playerEagle = s.pe; levelIntro = s.li;
+  freezeEnemies = s.fe; freezePlayer = s.fp; levelIntro = s.li;
   baseAlive = (s.base === 1 || s.base === true);
   if (typeof s.pz === 'number') setPaused(s.pz === 1, false);   // 被动跟随，不回广播
   if (typeof s.cg === 'number') continuesLeft = s.cg;           // 客方跟随房主的续关配额

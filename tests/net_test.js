@@ -726,12 +726,12 @@ function unit() {
 
   // 武器字母标识：8 种武器全覆盖且互不重复（v1.7.0 新增冲锋枪 M）
   const wl = vm.runInContext("(function(){ var miss = WEAPON_TYPES.filter(function(t){ return !WEAPON_LETTER[t]; }); var seen = {}, dup = []; WEAPON_TYPES.forEach(function(t){ var L = WEAPON_LETTER[t]; if (seen[L]) dup.push(L); seen[L] = 1; }); return {total: WEAPON_TYPES.length, miss: miss, dup: dup, ls: WEAPON_LETTER.laser + WEAPON_LETTER.spread}; })()", context);
-  assert('武器字母：8 种武器均有字母标识', wl.total === 8 && wl.miss.length === 0, JSON.stringify(wl));
+  assert('武器字母：7 种武器均有字母标识（v1.7.2 起 drill 并入 laser）', wl.total === 7 && wl.miss.length === 0, JSON.stringify(wl));
   assert('武器字母：字母唯一（激光=L 散弹=S）', wl.dup.length === 0 && wl.ls === 'LS', JSON.stringify(wl));
 
   // 地图上的武器道具绘制字母（而非 20x20 矢量小图标）
-  const wi = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText, txt = []; c.fillText = function(t){ txt.push(String(t)); }; drawItem({x:1,y:1,t:0,type:'flame'}); drawItem({x:1,y:1,t:0,type:'drill'}); c.fillText = orig; return txt; })()", context);
-  assert('武器道具：地图上绘制字母 F / D', wi.indexOf('F') >= 0 && wi.indexOf('D') >= 0, JSON.stringify(wi));
+  const wi = vm.runInContext("(function(){ var c = canvas.getContext('2d'); var orig = c.fillText, txt = []; c.fillText = function(t){ txt.push(String(t)); }; drawItem({x:1,y:1,t:0,type:'flame'}); drawItem({x:1,y:1,t:0,type:'laser'}); c.fillText = orig; return txt; })()", context);
+  assert('武器道具：地图上绘制字母 F / L', wi.indexOf('F') >= 0 && wi.indexOf('L') >= 0, JSON.stringify(wi));
 
   // 结束 / 标题 / 过关界面排版：逐行累加 y，行与行不得重叠。
   // 画面里的「点击下方按钮 或 按 Enter …」提示已删除：主入口改成画面内菜单，

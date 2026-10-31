@@ -177,6 +177,20 @@ player.gun = 'normal'; player.ammo = 0;
 bullets.length = 0; player.gun = 'spread'; player.ammo = 12; player.power = 1; player.dir = 1;
 fireBullet(player);
 assert('散弹枪：一次齐射 5 发', bullets.length === 5, 'n=' + bullets.length);
+
+/* 爆炸激光枪（v1.7.2）：命中主目标后，落点 1 格内的其它敌人也吃 1 点伤害 */
+startGame();
+enemyQueue.length = 0; bullets.length = 0; items.length = 0;
+for (let r = 4; r < 22; r++) for (let c = 2; c < 24; c++) map[r][c] = EMPTY;
+const blA = makeTank(10, 10, 0, 'basic', { invuln: 0 });
+const blNear = makeTank(11, 10, 0, 'basic', { invuln: 0 });
+const blFar = makeTank(13, 10, 0, 'basic', { invuln: 0 });
+enemies = [blA, blNear, blFar];
+applyHit({ owner: player, gun: 'laser', power: 1, dead: false,
+           px: blA.px, py: blA.py, dir: 1, hitIds: null, pierceLeft: 0 }, blA);
+assert('爆炸激光枪：主目标与 1 格内邻居一起掉血，2 格外不受影响',
+       blA.dead === true && blNear.dead === true && blFar.dead === false,
+       'main=' + blA.dead + ' near=' + blNear.dead + ' far=' + blFar.dead);
 player.gun = 'normal'; player.ammo = 0;
 
 /* 火焰枪：致死传染半径 2 格（正好 2 格要算进来） */
@@ -343,9 +357,9 @@ freezePlayer = 0; give(EH, 'clock');
 assert('H3 敌人吃时钟 = 冻玩家 5 秒', Math.abs(freezePlayer - 5) < 1e-9, 'freezePlayer=' + freezePlayer);
 EH.amphibious = 0; give(EH, 'amphibious');
 assert('H4 敌人吃两栖 = 40 秒', Math.abs(EH.amphibious - 40) < 1e-9, 'amph=' + EH.amphibious);
-playerEagle = 0; give(EH, 'eagle');
-assert('H5 敌人吃老鹰退化为护盾，玩家不获得老鹰',
-       Math.abs(EH.invuln - 6) < 1e-9 && playerEagle === 0, 'eagle=' + playerEagle);
+EH.invuln = 0; give(EH, 'eagle');
+assert('H5 敌人吃老鹰：拿不到任何收益（复活甲属于基地，敌人拿不走）',
+       EH.invuln === 0, 'invuln=' + EH.invuln);
 const qBefore = enemyQueue.length, livesBefore = lives;
 enemyQueue.length = 0; give(EH, 'tank');
 assert('H6 敌人吃加命 = 敌军增援（不偷玩家命）', lives === livesBefore && enemyQueue.length >= 1,
@@ -389,7 +403,7 @@ assert('I4 燃烧未满 0.4s 不结算', ET2.hp === hp0, 'hp=' + ET2.hp);
 tickStatus(ET2, 0.15);
 assert('I5 满 0.4s 结算 1 点', ET2.hp === hp0 - 1, 'hp=' + ET2.hp);
 /* 燃烧不吃穿老鹰无敌 */
-player.invuln = 0; playerEagle = 60; player.invuln = 60; player.burnT = 2.0; player.burnAcc = 0;
+player.invuln = 60; player.burnT = 2.0; player.burnAcc = 0;
 const lives0 = lives;
 for (let i = 0; i < 200; i++) updatePlayer(0.05);   // 10 秒
 assert('I6 老鹰无敌期间燃烧 DOT 暂停（不击穿无敌）',
@@ -403,7 +417,7 @@ assert('I7 减速：statusSpeedMul=0.5 且 speed 字段不变',
 ET3.slowT = 0;
 assert('I8 减速结束恢复', Math.abs(statusSpeedMul(ET3) - 1) < 1e-9, 'mul=' + statusSpeedMul(ET3));
 /* 玩家被点燃 → 枪管过热（不致死） */
-player.invuln = 0; playerEagle = 0; player.hp = player.maxHp;
+player.invuln = 0; player.hp = player.maxHp;
 player.overheatT = 1.5;
 assert('I9 玩家被点燃 → 过热封锁射击而非掉血', player.overheatT > 0 && player.hp === player.maxHp,
        'overheat=' + player.overheatT + ' hp=' + player.hp);
@@ -648,24 +662,26 @@ assert('N5 同名音效节流生效（shoot 连发被吞、boom 不受限）',
 /* ---------- P. 可读性：兵种识别标记（色盲冗余） ----------
  * 六张坦克贴图 alpha 轮廓完全一致（各 640 像素、逐对差 0.0%），
  * 兵种原本只靠颜色区分；这里用「点数」做形状冗余。 */
-__opStat.fillRect = 0; drawKindPips({ kind:'basic' }, 0, 0);
+__opStat.fillRect = 0; drawAtkMark({ kind:'basic' }, 0, 0);
 const pBasic = __opStat.fillRect;
-__opStat.fillRect = 0; drawKindPips({ kind:'fast' }, 0, 0);
+__opStat.fillRect = 0; drawAtkMark({ kind:'fast' }, 0, 0);
 const pFast = __opStat.fillRect;
-__opStat.fillRect = 0; drawKindPips({ kind:'power' }, 0, 0);
+__opStat.fillRect = 0; drawAtkMark({ kind:'power' }, 0, 0);
 const pPower = __opStat.fillRect;
-__opStat.fillRect = 0; drawKindPips({ kind:'armor' }, 0, 0);
+__opStat.fillRect = 0; drawAtkMark({ kind:'armor' }, 0, 0);
 const pArmor = __opStat.fillRect;
-__opStat.fillRect = 0; drawKindPips({ kind:'boss' }, 0, 0);
+__opStat.fillRect = 0; drawAtkMark({ kind:'boss' }, 0, 0);
 const pBoss = __opStat.fillRect;
-assert('P1 兵种点数：普通/首领无点，快速1 火力2 装甲3（各含1个深色底托）',
-       pBasic === 0 && pBoss === 0 && pFast === 2 && pPower === 3 && pArmor === 4,
+assert('P1 攻击方式标记：所有敌人都画（单发2格 / 重弹2格 / 两连发3格 / 三连发4格，均含底托）',
+       pBasic === 2 && pFast === 2 && pArmor === 2 && pPower === 3 && pBoss === 4,
        'basic=' + pBasic + ' fast=' + pFast + ' power=' + pPower + ' armor=' + pArmor + ' boss=' + pBoss);
-assert('P2 点数只由形状/数量承载（不依赖颜色：四类标记互斥、底托保证亮地形可读）',
-       KIND_PIPS.fast === 1 && KIND_PIPS.power === 2 && KIND_PIPS.armor === 3 &&
-       !('basic' in KIND_PIPS) && !('bonus' in KIND_PIPS) && !('boss' in KIND_PIPS),
-       JSON.stringify(KIND_PIPS));
-assert('P3 兵种点带与两栖标记带不重叠（点带 14~19，两栖 22 起）',
+assert('P2 标记与攻击方式一一对应（不再有「某些兵种什么都不画」）',
+       ATK_MARK.single.n === 1 && ATK_MARK.heavy.n === 1 &&
+       ATK_MARK.burst2.n === 2 && ATK_MARK.burst3.n === 3 &&
+       ETYPES.basic.atk === 'single' && ETYPES.power.atk === 'burst2' &&
+       ETYPES.armor.atk === 'heavy' && ETYPES.boss.atk === 'burst3',
+       JSON.stringify({ basic: ETYPES.basic.atk, power: ETYPES.power.atk, armor: ETYPES.armor.atk, boss: ETYPES.boss.atk }));
+assert('P3 标记带与两栖标记带不重叠（标记带 14~19，两栖 22 起）',
        KIND_PIP_Y - 1 + PIP_SIZE + 2 <= AMPHIB_Y,
        'pip=' + (KIND_PIP_Y - 1) + '~' + (KIND_PIP_Y - 1 + PIP_SIZE + 2) + ' amphib=' + AMPHIB_Y);
 
