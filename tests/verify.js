@@ -69,6 +69,10 @@ const sandbox = {
   performance: { now: () => sandbox.vnow },
   requestAnimationFrame: cb => { sandbox.RAF_CB = cb; return 1; },
   setTimeout: noop,
+  /* 竖屏闸门的 5 秒倒计时用 setInterval 起跳；沙箱里不必真的走秒，
+   * 只要让它能注册成功，测试即可手动驱动 rotAutoStep() 逐拍推进。 */
+  setInterval: () => 1,
+  clearInterval: noop,
   fetch: () => Promise.reject(new Error('no network in test')),   // 迫使走 <audio> 回退层
 };
 sandbox.globalThis = sandbox;
@@ -1282,6 +1286,34 @@ document.addEventListener = uSavedAdd;
 document.documentElement.requestFullscreen = uSavedFs;
 assert('U7 第一次触摸/点击即尝试全屏横屏（只触发一次，桌面不触发）',
        uArmed && uFirst && uOnce && uDeskNoop, 'armed=' + uArmed + ' fs=' + uFsCalls);
+
+/* U8 竖屏闸门 5 秒倒计时：弹出即开始，文案里带剩余秒数 */
+coarsePointer = true; rotDismissed = false; rotTried = 0;
+rotAutoDone = false; rotAutoTimer = 0; rotAutoLeft = 0;
+syncRotateGate();
+const uAutoOn = rotAutoLeft === ROT_AUTO_SEC && rgDesc.textContent.indexOf('5 秒后自动横屏') >= 0;
+assert('U8 闸门弹出即开始 5 秒倒计时，并在文案里显示秒数',
+       uAutoOn, 'left=' + rotAutoLeft + ' desc=' + rgDesc.textContent);
+
+/* U9 倒计时走完 → 自动执行一次「全屏并横屏」，且不会反复请求 */
+const uTriedBefore = rotTried;
+for (let i = 0; i < ROT_AUTO_SEC; i++) rotAutoStep();
+const uAutoFired = rotTried === uTriedBefore + 1 && rotAutoDone === true && rotAutoLeft === 0;
+rotAutoStep();
+rotAutoStep();
+const uAutoOnce = rotTried === uTriedBefore + 1;
+assert('U9 倒计时结束自动横屏一次，之后不再重复触发',
+       uAutoFired && uAutoOnce, 'tried=' + uTriedBefore + '->' + rotTried + ' done=' + rotAutoDone);
+
+/* U10 用户主动选「竖屏继续玩」→ 倒计时立即停止，不再自动转 */
+rotDismissed = true; syncRotateGate();          // 先让闸门收起，结束这一轮周期
+rotDismissed = false; rotAutoTimer = 0; rotAutoLeft = 0;
+syncRotateGate();                                // 再次弹出 → 应重新起倒计时
+const uRestarted = rotAutoLeft === ROT_AUTO_SEC;
+rotDismissed = true; syncRotateGate();
+assert('U10 选「竖屏继续玩」后倒计时立刻停止',
+       uRestarted && rotAutoLeft === 0 && rotGateOn === false,
+       'restart=' + uRestarted + ' left=' + rotAutoLeft + ' gate=' + rotGateOn);
 
 screen = uSavedScreen;
 coarsePointer = uSavedCoarse;

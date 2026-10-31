@@ -3979,7 +3979,12 @@ function toggleFit(){
  *   ③ 全都失败（iOS Safari 不支持锁方向、系统「自动旋转」被关掉、微信/老 WebView
  *      没有全屏 API）时弹出闸门给出明确指引，而不是静默竖屏让人以为是坏了。 */
 const ROT_MAX_TRY = 3;
+/* 竖屏闸门无人操作时，倒计时结束就自动按「全屏并横屏」处理。
+ * 手机上很多人根本不会去点那个提示框，干等着不如替他把方向转过去；
+ * 转不过去（iOS 不支持锁方向 / 系统关了「自动旋转」）会自动落到手动指引文案，不会反复弹。 */
+const ROT_AUTO_SEC = 5;
 let rotTried = 0, rotFirstDone = false, rotDismissed = false, rotTimer = 0, rotGateOn = false;
+let rotAutoTimer = 0, rotAutoLeft = 0, rotAutoDone = false;
 
 /* 当前是否竖屏：优先 screen.orientation，其次老的 window.orientation，最后退回视口尺寸。
  * 沙箱 / 老浏览器里前两者都可能不存在，最后一步保证永远有答案（且不抛错）。 */
@@ -4061,17 +4066,62 @@ function scheduleRotateGate(){
   if (typeof setTimeout !== 'function') return;
   rotTimer = setTimeout(() => { rotTimer = 0; syncRotateGate(); }, 900);
 }
+/* 停止倒计时（用户自己做了选择 / 闸门消失时调用） */
+function clearRotAuto(){
+  if (rotAutoTimer && typeof clearInterval === 'function'){
+    try { clearInterval(rotAutoTimer); } catch (e) {}
+  }
+  rotAutoTimer = 0;
+  rotAutoLeft = 0;
+}
+/* 闸门文案：基础说明 + （可选）倒计时提示。文案随尝试次数变 ——
+ * 一次都没试过就说「点按钮」，试过还竖着就改成手动指引。 */
+function paintRotDesc(){
+  if (!rgDesc) return;
+  const base = (rotTried === 0)
+    ? '本游戏按横屏设计：点下面的按钮自动进入全屏横屏。'
+    : '没能自动转横屏：请手动把手机横过来。若系统关掉了「自动旋转」，请先打开它再点按钮。';
+  rgDesc.textContent = (rotAutoLeft > 0)
+    ? base + '（' + rotAutoLeft + ' 秒后自动横屏）'
+    : base;
+}
+/* 走一秒。返回 true 表示这一拍触发了自动横屏。
+ * 抽成独立函数是为了可测：沙箱里没有 setInterval，但可以直接驱动它。 */
+function rotAutoStep(){
+  if (rotAutoDone) return false;      // 同一轮只自动一次，重复调用不会重复请求全屏
+  if (!rotGateOn || rotDismissed){ clearRotAuto(); paintRotDesc(); return false; }
+  rotAutoLeft--;
+  if (rotAutoLeft > 0){ paintRotDesc(); return false; }
+  clearRotAuto();
+  rotAutoDone = true;          // 同一次弹出里只自动试一次，避免反复请求全屏
+  rotDismissed = false;
+  paintRotDesc();
+  enterMobileFullscreen();
+  return true;
+}
+function startRotAuto(){
+  if (rotAutoTimer || rotAutoDone) return;
+  if (typeof setInterval !== 'function') return;
+  rotAutoLeft = ROT_AUTO_SEC;
+  paintRotDesc();
+  rotAutoTimer = setInterval(rotAutoStep, 1000);
+}
 function syncRotateGate(){
   const want = !!coarsePointer && !rotDismissed && isPortraitViewport();
+  const wasOn = rotGateOn;
   rotGateOn = want;
   if (rgGate && rgGate.classList && typeof rgGate.classList.toggle === 'function'){
     rgGate.classList.toggle('show', want);
   }
-  /* 文案随尝试次数变：一次都没试过就说「点按钮」，试过还竖着就改成手动指引
-   * （此时多半是 iOS 不支持锁方向、或系统把「自动旋转」关掉了）。 */
-  if (want && rgDesc) rgDesc.textContent = (rotTried === 0)
-    ? '本游戏按横屏设计：点下面的按钮自动进入全屏横屏。'
-    : '没能自动转横屏：请手动把手机横过来。若系统关掉了「自动旋转」，请先打开它再点按钮。';
+  if (want){
+    paintRotDesc();
+    /* 只在「刚弹出来」这一下起倒计时；后续 sync 不会重复起，避免和用户操作打架 */
+    if (!wasOn) startRotAuto();
+  } else {
+    clearRotAuto();
+    rotAutoDone = false;      // 闸门消失 = 一次完整周期结束，下次再竖屏还能自动一次
+    paintRotDesc();
+  }
 }
 /* 手机点「开始游戏 / 双人游戏」时顺手全屏 + 转横屏；闸门里的按钮也复用这里。 */
 function enterMobileFullscreen(){
@@ -4311,7 +4361,7 @@ if (setFit)    setFit.addEventListener('click',    () => toggleFit());
 if (setFs)     setFs.addEventListener('click',     () => { rotDismissed = false; toggleFullscreen(); });
 /* 竖屏闸门：「全屏并横屏」本身就是一次用户手势（浏览器只认手势），
  * 「竖屏继续玩」关掉本次会话的提示，不再反复弹。 */
-if (rgRetry)   rgRetry.addEventListener('click',   () => { initAudio(); rotDismissed = false; enterMobileFullscreen(); });
+if (rgRetry)   rgRetry.addEventListener('click',   () => { initAudio(); clearRotAuto(); rotDismissed = false; enterMobileFullscreen(); });
 if (rgSkip)    rgSkip.addEventListener('click',    () => { rotDismissed = true; syncRotateGate(); });
 if (setFlash)  setFlash.addEventListener('click',  () => toggleReduceMotion());
 if (caTitle)   caTitle.addEventListener('click',   () => {
